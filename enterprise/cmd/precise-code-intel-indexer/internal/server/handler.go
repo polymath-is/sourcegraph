@@ -39,6 +39,7 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 
 // POST /complete
 func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
+	// TODO - read from body instead
 	indexerName := getQuery(r, "indexerName")
 	indexID := getQueryInt(r, "indexId")
 	indexErr := getQueryAsErr(r, "errorMessage")

@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path"
 	"sync"
 	"time"
 
 	"github.com/efritz/glock"
 	"github.com/inconshreveable/log15"
+	"github.com/pkg/errors"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 )
 
@@ -65,12 +71,9 @@ loop:
 		delay := i.options.Interval
 		if dequeued {
 			delay = 0
-			fmt.Printf("GOING TO PROCESS %v\n", index)
-			var errorMessage string
-			if index.ID%2 == 0 {
-				errorMessage = "sdlfkjsdlfkjfd"
-			}
-			if err := complete(baseURL, index.ID, errorMessage); err != nil {
+
+			indexErr := process(i.ctx, i.options.FrontendURL, index)
+			if err := complete(baseURL, index.ID, indexErr); err != nil {
 				log15.Error("OOPS", "err", err)
 			}
 		} else {
@@ -124,9 +127,10 @@ func dequeue(baseURL string) (index store.Index, _ bool, _ error) {
 	return index, true, nil
 }
 
-func complete(baseURL string, indexID int, errorMessage string) error {
-	if errorMessage != "" {
-		errorMessage = fmt.Sprintf("&errorMessage=%s", errorMessage)
+func complete(baseURL string, indexID int, err error) error {
+	var errorMessage string
+	if err != nil {
+		errorMessage = fmt.Sprintf("&errorMessage=%s", err.Error())
 	}
 
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s/complete?indexerName=%s&indexId=%d%s", baseURL, IndexerName, indexID, errorMessage), nil)
@@ -142,6 +146,82 @@ func complete(baseURL string, indexID int, errorMessage string) error {
 
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func process(ctx context.Context, baseURL string, index store.Index) error {
+	repoDir, err := fetchRepository(ctx, baseURL, index.RepositoryID, index.RepositoryName, index.Commit)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.RemoveAll(repoDir)
+	}()
+
+	indexCommand := []string{
+		"run",
+		"--rm",
+		"-v", "`pwd`:/data",
+		"-w", "/data",
+		"sourcegraph/lsif-go:latest",
+		"bash", "-c", fmt.Sprintf("'lsif-go && src lsif upload'"),
+	}
+
+	if err := command(repoDir, "docker", indexCommand...); err != nil {
+		return errors.Wrap(err, "failed to index repository")
+	}
+
+	return nil
+}
+
+func fetchRepository(ctx context.Context, frontendURL string, repositoryID int, repositoryName string, commit string) (string, error) {
+	tempDir, err := ioutil.TempDir("", "")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(tempDir)
+		}
+	}()
+
+	frontendX, err := url.Parse(frontendURL)
+	if err != nil {
+		return "", err
+	}
+
+	if err := command(tempDir, "git", "init", "--bare"); err != nil {
+		return "", err
+	}
+
+	cloneURL := frontendX.ResolveReference(&url.URL{
+		Path: path.Join("/.internal/git", repositoryName),
+	})
+
+	fetchArgs := []string{
+		"-C", tempDir,
+		"-c", "protocol.version=2",
+		"fetch",
+		// "--depth=1",
+		cloneURL.String(),
+		commit,
+	}
+
+	if err := command(tempDir, "git", fetchArgs...); err != nil {
+		return "", err
+	}
+
+	return tempDir, nil
+}
+
+func command(dir, command string, args ...string) error {
+	indexCmd := exec.Command(command, args...)
+	indexCmd.Dir = dir
+
+	if output, err := indexCmd.CombinedOutput(); err != nil {
+		return errors.Wrap(err, fmt.Sprintf("command failed: %s\n", output))
 	}
 
 	return nil
