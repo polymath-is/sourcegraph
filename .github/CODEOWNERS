@@ -229,6 +229,7 @@ Dockerfile @sourcegraph/distribution
 /enterprise/cmd/precise-code-intel-bundle-manager/ @sourcegraph/code-intel
 /enterprise/cmd/precise-code-intel-worker/ @sourcegraph/code-intel
 /enterprise/cmd/precise-code-intel-indexer/ @sourcegraph/code-intel
+/enterprise/cmd/precise-code-intel-indexer2/ @sourcegraph/code-intel
 /enterprise/internal/codeintel @sourcegraph/code-intel
 /cmd/frontend/graphqlbackend/codeintel.go @sourcegraph/code-intel
 /internal/cmd/precise-code-intel-tester @sourcegraph/code-intel

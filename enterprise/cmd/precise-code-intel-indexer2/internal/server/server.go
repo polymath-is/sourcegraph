@@ -11,26 +11,22 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
-	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 )
 
-const Port = 3189
+const Port = 3190
 
 type Server struct {
-	transactionManager *TransactionManager
-	server             *http.Server
-	once               sync.Once
+	server *http.Server
+	once   sync.Once
 }
 
-func New(store workerutil.Store) *Server {
+func New() *Server {
 	host := ""
 	if env.InsecureDev {
 		host = "127.0.0.1"
 	}
 
-	s := &Server{
-		transactionManager: newTransactionManager(store),
-	}
+	s := &Server{}
 
 	s.server = &http.Server{
 		Addr:    net.JoinHostPort(host, strconv.FormatInt(int64(Port), 10)),

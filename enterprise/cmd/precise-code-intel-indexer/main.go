@@ -10,7 +10,6 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	indexabilityupdater "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/indexability_updater"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/indexer"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/janitor"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/resetter"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/scheduler"
@@ -25,15 +24,17 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/tracer"
 )
 
+//
+// TODO - move entire app into the enterprise frontend
+//
+
 func main() {
 	env.Lock()
 	env.HandleHelpFlag()
 	tracer.Init()
 
 	var (
-		frontendURL                      = mustGet(rawFrontendURL, "SRC_FRONTEND_INTERNAL")
 		resetInterval                    = mustParseInterval(rawResetInterval, "PRECISE_CODE_INTEL_RESET_INTERVAL")
-		indexerPollInterval              = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
 		schedulerInterval                = mustParseInterval(rawSchedulerInterval, "PRECISE_CODE_INTEL_SCHEDULER_INTERVAL")
 		indexabilityUpdaterInterval      = mustParseInterval(rawIndexabilityUpdaterInterval, "PRECISE_CODE_INTEL_INDEXABILITY_UPDATER_INTERVAL")
 		janitorInterval                  = mustParseInterval(rawJanitorInterval, "PRECISE_CODE_INTEL_JANITOR_INTERVAL")
@@ -51,24 +52,23 @@ func main() {
 		Registerer: prometheus.DefaultRegisterer,
 	}
 
-	store := store.NewObserved(mustInitializeStore(), observationContext)
-	MustRegisterQueueMonitor(observationContext.Registerer, store)
+	s := store.NewObserved(mustInitializeStore(), observationContext)
+	MustRegisterQueueMonitor(observationContext.Registerer, s)
 	resetterMetrics := resetter.NewResetterMetrics(prometheus.DefaultRegisterer)
 	indexabilityUpdaterMetrics := indexabilityupdater.NewUpdaterMetrics(prometheus.DefaultRegisterer)
 	schedulerMetrics := scheduler.NewSchedulerMetrics(prometheus.DefaultRegisterer)
-	indexerMetrics := indexer.NewIndexerMetrics(observationContext)
-	server := server.New()
-	indexResetter := resetter.NewIndexResetter(store, resetInterval, resetterMetrics)
+	server := server.New(store.WorkerutilIndexStore(s))
+	indexResetter := resetter.NewIndexResetter(s, resetInterval, resetterMetrics)
 
 	indexabilityUpdater := indexabilityupdater.NewUpdater(
-		store,
+		s,
 		gitserver.DefaultClient,
 		indexabilityUpdaterInterval,
 		indexabilityUpdaterMetrics,
 	)
 
 	scheduler := scheduler.NewScheduler(
-		store,
+		s,
 		gitserver.DefaultClient,
 		schedulerInterval,
 		indexBatchSize,
@@ -79,22 +79,13 @@ func main() {
 		schedulerMetrics,
 	)
 
-	indexer := indexer.NewIndexer(
-		store,
-		gitserver.DefaultClient,
-		frontendURL,
-		indexerPollInterval,
-		indexerMetrics,
-	)
-
 	janitorMetrics := janitor.NewJanitorMetrics(prometheus.DefaultRegisterer)
-	janitor := janitor.New(store, janitorInterval, janitorMetrics)
+	janitor := janitor.New(s, janitorInterval, janitorMetrics)
 
 	go server.Start()
 	go indexResetter.Start()
 	go indexabilityUpdater.Start()
 	go scheduler.Start()
-	go indexer.Start()
 	go debugserver.Start()
 
 	if !disableJanitor {
@@ -116,7 +107,6 @@ func main() {
 
 	server.Stop()
 	indexResetter.Stop()
-	indexer.Stop()
 	scheduler.Stop()
 	indexabilityUpdater.Stop()
 	janitor.Stop()

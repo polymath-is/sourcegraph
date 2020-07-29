@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"os"
 	"strconv"
 	"time"
 
@@ -10,9 +9,7 @@ import (
 )
 
 var (
-	rawFrontendURL, _                   = os.LookupEnv("SRC_FRONTEND_INTERNAL")
 	rawResetInterval                    = env.Get("PRECISE_CODE_INTEL_RESET_INTERVAL", "1m", "How often to reset stalled indexes.")
-	rawIndexerPollInterval              = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
 	rawIndexabilityUpdaterInterval      = env.Get("PRECISE_CODE_INTEL_INDEXABILITY_UPDATER_INTERVAL", "30m", "Interval between scheduled indexability updates.")
 	rawSchedulerInterval                = env.Get("PRECISE_CODE_INTEL_SCHEDULER_INTERVAL", "30m", "Interval between scheduled index updates.")
 	rawJanitorInterval                  = env.Get("PRECISE_CODE_INTEL_JANITOR_INTERVAL", "1m", "Interval between cleanup runs.")
@@ -23,15 +20,6 @@ var (
 	rawIndexMinimumPreciseCount         = env.Get("PRECISE_CODE_INTEL_INDEX_MINIMUM_PRECISE_COUNT", "1", "Minimum number of precise events to trigger indexing for a repo.")
 	rawDisableJanitor                   = env.Get("PRECISE_CODE_INTEL_DISABLE_JANITOR", "false", "Set to true to disable the janitor process during system migrations.")
 )
-
-// mustGet returns the non-empty version of the given raw value fatally logs on failure.
-func mustGet(rawValue, name string) string {
-	if rawValue == "" {
-		log.Fatalf("invalid value %q for %s: no value supplied", rawValue, name)
-	}
-
-	return rawValue
-}
 
 // mustParseInt returns the integer version of the given raw value fatally logs on failure.
 func mustParseInt(rawValue, name string) int {

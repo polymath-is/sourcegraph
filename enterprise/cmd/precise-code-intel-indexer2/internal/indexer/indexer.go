@@ -2,27 +2,20 @@ package indexer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/gitserver"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
-	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 )
 
 func NewIndexer(
-	s store.Store,
-	gitserverClient gitserver.Client,
 	frontendURL string,
 	pollInterval time.Duration,
 	metrics IndexerMetrics,
 ) *workerutil.Worker {
-	rootContext := actor.WithActor(context.Background(), &actor.Actor{Internal: true})
-
 	processor := &processor{
-		store:           s,
-		gitserverClient: gitserverClient,
-		frontendURL:     frontendURL,
+		frontendURL: frontendURL,
 	}
 
 	handler := workerutil.HandlerFunc(func(ctx context.Context, tx workerutil.Store, record workerutil.Record) error {
@@ -40,5 +33,10 @@ func NewIndexer(
 		Metrics:     workerMetrics,
 	}
 
-	return workerutil.NewWorker(rootContext, store.WorkerutilIndexStore(s), options)
+	//
+	// TODO - need to poll the frontend instead
+	//
+
+	fmt.Printf("Options: %v\n", options)
+	return nil
 }
