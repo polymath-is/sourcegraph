@@ -24,10 +24,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/tracer"
 )
 
-//
-// TODO - move entire app into the enterprise frontend
-//
-
 func main() {
 	env.Lock()
 	env.HandleHelpFlag()
