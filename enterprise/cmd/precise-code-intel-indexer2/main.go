@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,10 +36,14 @@ func main() {
 
 	server := server.New()
 	indexerMetrics := indexer.NewIndexerMetrics(observationContext)
-	indexer := indexer.NewIndexer(frontendURL, indexerPollInterval, indexerMetrics)
+	indexer := indexer.NewIndexer(context.Background(), indexer.IndexerOptions{
+		FrontendURL: frontendURL,
+		Interval:    indexerPollInterval,
+		Metrics:     indexerMetrics,
+	})
 
 	go server.Start()
-	fmt.Printf("SKIPPING INDEXER START %s\n", indexer) // go indexer.Start()
+	go indexer.Start()
 	go debugserver.Start()
 
 	signals := make(chan os.Signal, 2)
@@ -53,5 +57,5 @@ func main() {
 	}()
 
 	server.Stop()
-	fmt.Printf("SKIPPING INDEXER STOP\n") // indexer.Stop()
+	indexer.Stop()
 }

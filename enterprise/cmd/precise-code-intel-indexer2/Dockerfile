@@ -14,7 +14,6 @@ RUN apk update && apk add --no-cache \
     tini
 
 USER sourcegraph
-# TODO - change
 EXPOSE 3190
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/precise-code-intel-indexer2"]
 COPY precise-code-intel-indexer2 /usr/local/bin/

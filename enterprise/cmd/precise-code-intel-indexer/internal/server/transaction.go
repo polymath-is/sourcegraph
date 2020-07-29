@@ -118,6 +118,21 @@ func (m *TransactionManager) complete(indexerName string, indexID int, indexErr 
 }
 
 func (m *TransactionManager) dequeue(ctx context.Context) (JobMeta, bool, error) {
+	count := 0
+	m.m.Lock()
+	for _, v := range m.indexers {
+		count += len(v.jobs)
+	}
+	m.m.Unlock()
+
+	// TODo - why is it that we block on a query once we
+	// have so many running transactions?
+
+	// TODO - make configurable
+	if count > 10 {
+		return JobMeta{}, false, nil
+	}
+
 	// TODO - check current outstanding requests to not
 	// blow out our open transactions.
 
@@ -185,6 +200,10 @@ func (m *TransactionManager) cleanup() {
 		}
 
 		for _, job := range meta.jobs {
+			//
+			// TODO - may up the reset count?
+			//
+
 			if err := job.tx.Requeue(ctx, job.index.ID, time.Now().Add(time.Second*5)); err != nil {
 				log15.Error("failed to requeue job", "error", err)
 			}

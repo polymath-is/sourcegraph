@@ -254,7 +254,6 @@ func (s *store) Dequeue(ctx context.Context, conditions []*sqlf.Query) (record R
 			// by selecting another identifier - this one will be skipped on a second attempt as
 			// it is now locked.
 			continue
-
 		}
 
 		// The record is now locked in this transaction. As `TableName` and `ViewName` may have distinct

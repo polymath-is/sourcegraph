@@ -18,7 +18,7 @@ type processor struct {
 }
 
 func (p *processor) Process(ctx context.Context, index store.Index) error {
-	repoDir, err := fetchRepository(ctx, index.RepositoryID, index.Commit)
+	repoDir, err := fetchRepository(ctx, p.frontendURL, index.RepositoryID, index.RepositoryName, index.Commit)
 	if err != nil {
 		return err
 	}

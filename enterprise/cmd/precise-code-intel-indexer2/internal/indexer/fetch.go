@@ -2,12 +2,13 @@ package indexer
 
 import (
 	"context"
-	"fmt"
 	"io/ioutil"
+	"net/url"
 	"os"
+	"path"
 )
 
-func fetchRepository(ctx context.Context, repositoryID int, commit string) (string, error) {
+func fetchRepository(ctx context.Context, frontendURL string, repositoryID int, repositoryName string, commit string) (string, error) {
 	tempDir, err := ioutil.TempDir("", "")
 	if err != nil {
 		return "", err
@@ -18,19 +19,31 @@ func fetchRepository(ctx context.Context, repositoryID int, commit string) (stri
 		}
 	}()
 
-	if true {
-		// TODO - implement
-		return "", fmt.Errorf("unimplemented")
+	frontendX, err := url.Parse(frontendURL)
+	if err != nil {
+		return "", err
 	}
 
-	// archive, err := gitserverClient.Archive(ctx, store, repositoryID, commit)
-	// if err != nil {
-	// 	return "", errors.Wrap(err, "gitserver.Archive")
-	// }
+	if err := command(tempDir, "git", "init", "--bare"); err != nil {
+		return "", err
+	}
 
-	// if err := tar.Extract(tempDir, archive); err != nil {
-	// 	return "", errors.Wrap(err, "tar.Extract")
-	// }
+	cloneURL := frontendX.ResolveReference(&url.URL{
+		Path: path.Join("/.internal/git", repositoryName),
+	})
+
+	fetchArgs := []string{
+		"-C", tempDir,
+		"-c", "protocol.version=2",
+		"fetch",
+		// "--depth=1",
+		cloneURL.String(),
+		commit,
+	}
+
+	if err := command(tempDir, "git", fetchArgs...); err != nil {
+		return "", err
+	}
 
 	return tempDir, nil
 }
