@@ -54,7 +54,7 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 func (i *Indexer) Start() {
 	defer close(i.finished)
 
-	// TODO - configure
+	// TODO - configure, or otherwise proxy from frontend
 	baseURL := "http://localhost:3189"
 
 	//
