@@ -12,18 +12,29 @@ import (
 
 // TODO - document
 type Manager interface {
-	Start()
-	Stop()
+	// TODO - document
 	Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error)
+	// TODO - document
 	Complete(ctx context.Context, request CompleteRequest) (bool, error)
+	// TODO - document
 	Heartbeat(request HeartbeatRequest)
+}
+
+// TODO - document
+type ThreadedManager interface {
+	Manager
+
+	// TODO - document
+	Start()
+	// TODO - document
+	Stop()
 }
 
 type manager struct {
 	store    workerutil.Store
-	m        sync.Mutex
-	indexers map[string]*IndexerMeta
 	requests chan interface{}
+	indexers map[string]*indexerMeta
+	m        sync.Mutex      // guards indexers
 	ctx      context.Context // root context passed to the database
 	cancel   func()          // cancels the root context
 	finished chan struct{}   // signals that Start has finished
@@ -31,29 +42,31 @@ type manager struct {
 
 var _ Manager = &manager{}
 
-// TODO - document
-type IndexerMeta struct {
-	LastHeartbeat time.Time
-	Indexes       []IndexMeta
+// indexerMeta tracks the last request time of an index agent along with the set of
+// index records which it is currently processing.
+type indexerMeta struct {
+	lastUpdate time.Time
+	metas      []indexMeta
 }
 
-// TODO - document
-func New(s workerutil.Store) Manager {
+// New creates a new manager with the given store.
+func New(s workerutil.Store) ThreadedManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &manager{
 		store:    s,
-		indexers: map[string]*IndexerMeta{},
 		requests: make(chan interface{}),
+		indexers: map[string]*indexerMeta{},
 		ctx:      ctx,
 		cancel:   cancel,
 		finished: make(chan struct{}),
 	}
 }
 
-// TODO - document
-// Start runs the poll and heartbeat loops. This method blocks until all background
-// goroutines have exited.
+// Start runs routine that handles dequeue, complete, and heartbeat requests invoked from
+// other goroutines. We handle requests that modify database transactions from a single
+// goroutine to simplify bookkeeping of live transactions. This method blocks until Stop
+// has been called.
 func (m *manager) Start() {
 	defer close(m.requests)
 	defer close(m.finished)
@@ -71,13 +84,14 @@ loop:
 			break loop
 		}
 	}
+
+	// TODO - close all transactions
 }
 
-// TODO - document
-// Stop will cause the indexer loop to exit after the current iteration. This is done by
-// canceling the context passed to the subprocess functions (which may cause the currently
-// processing unit of work to fail). This method blocks until all background goroutines have
-// exited.
+// Stop will cause Start to exit after the current request. This is done by canceling the context
+// passed to the database (which may cause the currently processing unit of work to fail). This
+// method blocks until Start has returned. All active transactions known by the manager will be
+// rolled back.
 func (m *manager) Stop() {
 	m.cancel()
 	<-m.finished
@@ -88,25 +102,29 @@ func (m *manager) Dequeue(ctx context.Context, request DequeueRequest) (store.In
 	envelope := newDequeueRequestEnvelope(ctx, request)
 
 	select {
+	// Send request to processing thread
 	case m.requests <- envelope:
 	case <-ctx.Done():
 		return store.Index{}, false, ctx.Err()
 	}
 
 	select {
-	case response := <-envelope.Response:
-		if response.Error != nil || !response.Dequeued {
-			return store.Index{}, false, response.Error
+	// Wait for associated response
+	case response := <-envelope.response:
+		if response.err != nil || !response.dequeued {
+			return store.Index{}, false, response.err
 		}
 
-		m.updateIndexer(request.IndexerName, response.Index)
-		return response.Index.Index, true, nil
+		m.updateIndexer(request.IndexerName, response.meta)
+		return response.meta.index, true, nil
 
 	case <-ctx.Done():
+		// Handle the race condition where a transaction is successfully
+		// started but not inserted into the indexer's map. We immediately
+		// rollback the transaction if there is one.
 		go func() {
-			// TODO - document
-			if response := <-envelope.Response; response.Dequeued {
-				_ = response.Index.Tx.Done(ctx.Err())
+			if response := <-envelope.response; response.dequeued {
+				_ = response.meta.tx.Done(ctx.Err())
 			}
 		}()
 
@@ -119,14 +137,16 @@ func (m *manager) Complete(ctx context.Context, request CompleteRequest) (bool, 
 	envelope := newCompleteRequestEnvelope(ctx, request)
 
 	select {
+	// Send request to processing thread
 	case m.requests <- envelope:
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
 
 	select {
-	case response := <-envelope.Response:
-		return response.Found, response.Error
+	// Wait for associated response
+	case response := <-envelope.response:
+		return response.found, response.err
 
 	case <-ctx.Done():
 		return false, ctx.Err()
@@ -140,148 +160,162 @@ func (m *manager) Heartbeat(request HeartbeatRequest) {
 	m.updateIndexer(request.IndexerName)
 }
 
-// TODO - document
-func (m *manager) updateIndexer(indexerName string, indexes ...IndexMeta) {
+// updateIndexer updates the view of an index agent by bumping its last update
+// time and assigning it any supplied index meta values.
+func (m *manager) updateIndexer(indexerName string, metas ...indexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
-	indexerMeta, ok := m.indexers[indexerName]
+	meta, ok := m.indexers[indexerName]
 	if !ok {
-		indexerMeta = &IndexerMeta{}
+		meta = &indexerMeta{}
 	}
 
-	indexerMeta.LastHeartbeat = time.Now()
-	indexerMeta.Indexes = append(indexerMeta.Indexes, indexes...)
+	meta.lastUpdate = time.Now()
+	meta.metas = append(meta.metas, metas...)
 }
 
-// TODO - document
+// The following methods are run in the goroutine handled by Start and are thus
+// single-threaded.
+
+// TODO
 func (m *manager) handle(rawRequest interface{}) {
 	switch request := rawRequest.(type) {
 	case dequeueRequestEnvelope:
-		request.Response <- m.dequeue(request.DequeueRequest)
+		request.response <- m.dequeue(request.DequeueRequest)
 
 	case completeRequestEnvelope:
-		request.Response <- m.complete(request.CompleteRequest)
+		request.response <- m.complete(request.CompleteRequest)
 	}
+
+default:
+	// TODO - error
 }
 
-// TODO - document
-func (m *manager) dequeue(request DequeueRequest) DequeueResponse {
+// dequeue selects a queued, unlocked index record and returns an index meta value
+// wrapping the record and the transaction that locks it.
+func (m *manager) dequeue(request DequeueRequest) dequeueResponse {
 	ctx := context.Background() // TODO - combine self, request.Context
 
+	// TODO - make configurable
 	// TODO - why is it that we block on a query once we
 	// have so many running transactions?
-
-	// TODO - make configurable
 	if m.countTotalIndexes() > 10 {
-		return DequeueResponse{}
+		return dequeueResponse{}
 	}
-
-	// TODO - check current outstanding requests to not
-	// blow out our open transactions.
 
 	record, tx, dequeued, err := m.store.Dequeue(ctx, nil)
 	if err != nil {
-		return DequeueResponse{Error: err}
+		return dequeueResponse{err: err}
 	}
 	if !dequeued {
-		return DequeueResponse{}
+		return dequeueResponse{}
 	}
 
-	index := IndexMeta{Index: record.(store.Index), Tx: tx}
-	m.updateIndexer(request.IndexerName, index)
-	return DequeueResponse{Index: index, Dequeued: true}
+	meta := indexMeta{index: record.(store.Index), tx: tx}
+	m.updateIndexer(request.IndexerName, meta)
+	return dequeueResponse{meta: meta, dequeued: true}
 }
 
-// TODO - document
+// countTotalIndexes returns the number of locked index records known by this manager.
 func (m *manager) countTotalIndexes() int {
 	m.m.Lock()
 	defer m.m.Unlock()
 
 	count := 0
 	for _, v := range m.indexers {
-		count += len(v.Indexes)
+		count += len(v.metas)
 	}
 
 	return count
 }
 
-// TODO - document
-func (m *manager) complete(request CompleteRequest) CompleteResponse {
-	index, ok := m.removeIndex(request.IndexerName, request.IndexID)
+// complete finds the target index meta value, removes it from the index agent, marks the
+// index record as complete or errored depending on the existence of an error message,
+// then finalizes the transaction that locks that record.
+func (m *manager) complete(request CompleteRequest) completeResponse {
+	index, ok := m.findMeta(request.IndexerName, request.IndexID)
 	if !ok {
-		return CompleteResponse{}
+		return completeResponse{}
 	}
 
 	if err := m.completeIndex(index, request.ErrorMessage); err != nil {
-		return CompleteResponse{Error: err}
+		return completeResponse{err: err}
 	}
 
-	return CompleteResponse{Found: true}
+	return completeResponse{found: true}
 }
 
-// TODO - document
-func (m *manager) removeIndex(indexerName string, indexID int) (IndexMeta, bool) {
+// findMeta finds and returns an index meta value matching the given index identifier. If found,
+// the meta value is removed from the index agent.
+func (m *manager) findMeta(indexerName string, indexID int) (indexMeta, bool) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
-	indexes := m.indexers[indexerName].Indexes
+	metas := m.indexers[indexerName].metas
 
-	for i, index := range indexes {
-		if index.Index.ID != indexID {
+	for i, meta := range metas {
+		if meta.index.ID != indexID {
 			continue
 		}
 
-		indexes[i] = indexes[len(indexes)-1]
-		indexes = indexes[:len(indexes)-1]
-		m.indexers[indexerName].Indexes = indexes
-		return index, true
+		metas[i] = metas[len(metas)-1]
+		m.indexers[indexerName].metas = metas[:len(metas)-1]
+		return meta, true
 	}
 
-	return IndexMeta{}, false
+	return indexMeta{}, false
 }
 
-// TODO - document
-func (m *manager) completeIndex(index IndexMeta, errorMessage string) (err error) {
+// completeIndex marks the target index record as complete or errored depending on the
+// existence of an error message, then finalizes the transaction that locks that record.
+func (m *manager) completeIndex(meta indexMeta, errorMessage string) (err error) {
 	ctx := context.Background() // TODO - combine self, request.Context
 
 	if errorMessage == "" {
-		_, err = index.Tx.MarkComplete(ctx, index.Index.ID)
+		_, err = meta.tx.MarkComplete(ctx, meta.index.ID)
 	} else {
-		_, err = index.Tx.MarkErrored(ctx, index.Index.ID, errorMessage)
+		_, err = meta.tx.MarkErrored(ctx, meta.index.ID, errorMessage)
 	}
 
-	return index.Tx.Done(err)
+	return meta.tx.Done(err)
 }
 
-// TODO - document
+// cleanup rolls back the transactions assigned to every index agent which has not been
+// updated longer than the death threshold.
 func (m *manager) cleanup() {
 	ctx := context.Background()
 
-	for _, index := range m.pruneIndexes() {
-		if err := index.Tx.Requeue(ctx, index.Index.ID, time.Now().Add(time.Second*5)); err != nil {
+	for _, meta := range m.pruneIndexers() {
+		delay := time.Second * 5 // TODO - configure
+		if err := meta.tx.Requeue(ctx, meta.index.ID, time.Now().Add(delay)); err != nil {
 			log15.Error("failed to requeue index", "error", err)
 		}
 
-		if err := index.Tx.Done(nil); err != nil {
+		if err := meta.tx.Done(nil); err != nil {
 			log15.Error("failed to close transaction", "error", err)
 		}
 	}
 }
 
 // TODO - document
-func (m *manager) pruneIndexes() (indexes []IndexMeta) {
+var DeathThreshold = time.Second * 5
+
+// pruneIndexers removes the data associated with index agents which have not been updated
+// longer than the death threshold and returns all index meta values assigned to removed
+// index agents.
+func (m *manager) pruneIndexers() (metas []indexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
 	for name, meta := range m.indexers {
-		if time.Since(meta.LastHeartbeat) <= time.Second*5 {
+		if time.Since(meta.lastUpdate) <= DeathThreshold {
 			continue
 		}
 
-		indexes = append(indexes, meta.Indexes...)
+		metas = append(metas, meta.metas...)
 		delete(m.indexers, name)
 	}
 
-	return indexes
+	return metas
 }

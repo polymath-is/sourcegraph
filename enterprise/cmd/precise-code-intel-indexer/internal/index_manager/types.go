@@ -12,45 +12,48 @@ type DequeueRequest = types.DequeueRequest
 type CompleteRequest = types.CompleteRequest
 type HeartbeatRequest = types.HeartbeatRequest
 
-// TODO - document
-type IndexMeta struct {
-	Index store.Index
-	Tx    workerutil.Store
-}
-
-// TODO - document
-type DequeueResponse struct {
-	Index    IndexMeta
-	Dequeued bool
-	Error    error
-}
-
-// TODO - document
-type CompleteResponse struct {
-	Found bool
-	Error error
-}
-
-// TODO - document
+// dequeueRequestEnvelope extends a dequeue request with a request context
+// and a channel on which the response is placed by the manager.
 type dequeueRequestEnvelope struct {
 	DequeueRequest
-	Context  context.Context
-	Response chan DequeueResponse
+	context  context.Context
+	response chan dequeueResponse
 }
 
-// TODO - document
+// newDequeueRequestEnvelope wraps the given dequeue request in an envelope.
 func newDequeueRequestEnvelope(ctx context.Context, request DequeueRequest) dequeueRequestEnvelope {
-	return dequeueRequestEnvelope{Context: ctx, DequeueRequest: request, Response: make(chan DequeueResponse, 1)}
+	return dequeueRequestEnvelope{context: ctx, DequeueRequest: request, response: make(chan dequeueResponse, 1)}
 }
 
-// TODO - document
+// dequeueResponse is the response of an internal dequeue request.
+type dequeueResponse struct {
+	meta     indexMeta
+	dequeued bool
+	err      error
+}
+
+// indexMeta wraps an index record and the tranaction that is currently locking
+// it for processing.
+type indexMeta struct {
+	index store.Index
+	tx    workerutil.Store
+}
+
+// completeRequestEnvelope extends a complete request with a request context
+// and a channel on which the response is placed by the manager.
 type completeRequestEnvelope struct {
 	CompleteRequest
-	Context  context.Context
-	Response chan CompleteResponse
+	context  context.Context
+	response chan completeResponse
 }
 
-// TODO - document
+// newCompleteRequestEnvelope wraps the given complete request in an envelope.
 func newCompleteRequestEnvelope(ctx context.Context, request CompleteRequest) completeRequestEnvelope {
-	return completeRequestEnvelope{Context: ctx, CompleteRequest: request, Response: make(chan CompleteResponse, 1)}
+	return completeRequestEnvelope{context: ctx, CompleteRequest: request, response: make(chan completeResponse, 1)}
+}
+
+// completeResponse is the response of an internal complete request.
+type completeResponse struct {
+	found bool
+	err   error
 }
