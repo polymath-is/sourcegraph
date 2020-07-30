@@ -4451,7 +4451,6 @@ export type RepositoriesVariables = {
     first: number | null
     query: string | null
     cloned: boolean | null
-    cloneInProgress: boolean | null
     notCloned: boolean | null
     indexed: boolean | null
     notIndexed: boolean | null
