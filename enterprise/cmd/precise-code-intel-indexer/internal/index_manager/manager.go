@@ -94,10 +94,10 @@ type indexerMeta struct {
 
 // New creates a new manager with the given store and options.
 func New(store workerutil.Store, options ManagerOptions) ThreadedManager {
-	return new(store, options, glock.NewRealClock())
+	return newManager(store, options, glock.NewRealClock())
 }
 
-func New(store workerutil.Store, options ManagerOptions, clock glock.Clock) ThreadedManager {
+func newManager(store workerutil.Store, options ManagerOptions, clock glock.Clock) ThreadedManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &manager{
@@ -344,15 +344,19 @@ func (m *manager) findMeta(indexerName string, indexID int) (indexMeta, bool) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
-	metas := m.indexers[indexerName].metas
+	indexer, ok := m.indexers[indexerName]
+	if !ok {
+		return indexMeta{}, false
+	}
 
-	for i, meta := range metas {
+	for i, meta := range indexer.metas {
 		if meta.index.ID != indexID {
 			continue
 		}
 
-		metas[i] = metas[len(metas)-1]
-		m.indexers[indexerName].metas = metas[:len(metas)-1]
+		l := len(indexer.metas) - 1
+		indexer.metas[i] = indexer.metas[l]
+		indexer.metas = indexer.metas[:l]
 		return meta, true
 	}
 

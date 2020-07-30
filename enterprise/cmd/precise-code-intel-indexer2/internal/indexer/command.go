@@ -3,18 +3,15 @@ package indexer
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"os/exec"
 	"sync"
+
+	"github.com/inconshreveable/log15"
 )
 
-// TODO - document
+// command invokes the given command on the host.
 func command(ctx context.Context, command string, args ...string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("empty args")
-	}
-
 	cmd, stdout, stderr, err := makeCommand(ctx, command, args...)
 	if err != nil {
 		return err
@@ -38,6 +35,7 @@ func command(ctx context.Context, command string, args ...string) error {
 	return nil
 }
 
+// makeCommand returns a new exec.Cmd and pipes to its stdout/stderr streams.
 func makeCommand(ctx context.Context, command string, args ...string) (_ *exec.Cmd, stdout, stderr io.Reader, err error) {
 	cmd := exec.CommandContext(ctx, command, args...)
 
@@ -54,11 +52,14 @@ func makeCommand(ctx context.Context, command string, args ...string) (_ *exec.C
 	return cmd, stdout, stderr, nil
 }
 
+// parallel runs each function in its own goroutine and returns a wait group that
+// blocks until all invocations have returned.
 func parallel(funcs ...func()) *sync.WaitGroup {
 	var wg sync.WaitGroup
 
 	for _, f := range funcs {
 		wg.Add(1)
+
 		go func(f func()) {
 			defer wg.Done()
 			f()
@@ -68,10 +69,11 @@ func parallel(funcs ...func()) *sync.WaitGroup {
 	return &wg
 }
 
+// processStream prefixes and logs each line of the given reader.
 func processStream(prefix string, r io.Reader) {
 	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
-		fmt.Printf("%s: %s\n", prefix, scanner.Text())
+		log15.Info("%s: %s\n", prefix, scanner.Text())
 	}
 }

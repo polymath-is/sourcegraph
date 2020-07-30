@@ -19,7 +19,6 @@ import (
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 )
 
-// TODO - document
 type Indexer struct {
 	options  IndexerOptions
 	clock    glock.Clock
@@ -41,7 +40,6 @@ type IndexerOptions struct {
 
 const ImageBinary = "docker" // TODO - configure
 
-// TODO - document
 func NewIndexer(ctx context.Context, options IndexerOptions) *Indexer {
 	return newIndexer(ctx, options, glock.NewRealClock())
 }
@@ -91,14 +89,9 @@ loop:
 
 		delay := i.options.PollInterval
 		if dequeued {
-			i.addID(index.ID)
-			defer i.removeID(index.ID)
-
 			log15.Info("Dequeued index for processing", "id", index.ID)
 
-			indexErr := i.process(index)
-
-			if err := client.Complete(i.ctx, index.ID, indexErr); err != nil {
+			if err := i.processAndComplete(client, index); err != nil {
 				for ex := err; ex != nil; ex = errors.Unwrap(ex) {
 					if err == i.ctx.Err() {
 						break loop
@@ -106,12 +99,6 @@ loop:
 				}
 
 				log15.Error("Failed to finalize index", "id", index.ID, "err", err)
-			} else {
-				if indexErr == nil {
-					log15.Info("Marked index as complete", "id", index.ID)
-				} else {
-					log15.Warn("Marked index as errored", "id", index.ID, "err", indexErr)
-				}
 			}
 
 			// If we had a successful dequeue, do not wait the poll interval.
@@ -188,6 +175,28 @@ func (i *Indexer) removeID(indexID int) {
 	delete(i.indexIDs, indexID)
 }
 
+// process clones the target code, invokes the target indexer, uploads the result to the
+// external frontend API, then marks the dequeued record as complete (or errored) in the
+// index queue.
+func (i *Indexer) processAndComplete(client client.Client, index store.Index) error {
+	i.addID(index.ID)
+	defer i.removeID(index.ID)
+
+	indexErr := i.process(index)
+
+	if err := client.Complete(i.ctx, index.ID, indexErr); err != nil {
+		return err
+	}
+
+	if indexErr == nil {
+		log15.Info("Marked index as complete", "id", index.ID)
+	} else {
+		log15.Warn("Marked index as errored", "id", index.ID, "err", indexErr)
+	}
+
+	return nil
+}
+
 // process clones the target code into a temporary directory, invokes the target indexer in
 // a fresh docker container, and uploads the results to the external frontend API.
 func (i *Indexer) process(index store.Index) error {
@@ -239,7 +248,7 @@ func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error)
 
 	commands := [][]string{
 		{"-C", tempDir, "init"},
-		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit}, // TODO - somehow rate limit this
+		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit}, // TODO - rate limit the fetch
 		{"-C", tempDir, "checkout", commit},
 	}
 
