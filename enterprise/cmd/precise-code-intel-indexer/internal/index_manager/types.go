@@ -2,6 +2,7 @@ package indexmanager
 
 import (
 	"context"
+	"time"
 
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
@@ -35,8 +36,9 @@ type dequeueResponse struct {
 // indexMeta wraps an index record and the tranaction that is currently locking
 // it for processing.
 type indexMeta struct {
-	index store.Index
-	tx    workerutil.Store
+	index   store.Index
+	tx      workerutil.Store
+	started time.Time
 }
 
 // completeRequestEnvelope extends a complete request with a request context

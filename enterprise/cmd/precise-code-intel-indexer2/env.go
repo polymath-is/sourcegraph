@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	rawFrontendURL              = "localhost:3080"            // TODO - supply
-	rawFrontendURLFromDocker    = "host.docker.internal:3080" // TODO - supply
+	rawFrontendURL              = "localhost:3080"            // TODO - configure
+	rawFrontendURLFromDocker    = "host.docker.internal:3080" // TODO - configure
 	rawIndexerPollInterval      = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
 	rawIndexerHeartbeatInterval = env.Get("PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL", "1s", "Interval between heartbeat requests.")
 )

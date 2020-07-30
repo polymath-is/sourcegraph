@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
@@ -55,7 +56,13 @@ func main() {
 	resetterMetrics := resetter.NewResetterMetrics(prometheus.DefaultRegisterer)
 	indexabilityUpdaterMetrics := indexabilityupdater.NewUpdaterMetrics(prometheus.DefaultRegisterer)
 	schedulerMetrics := scheduler.NewSchedulerMetrics(prometheus.DefaultRegisterer)
-	indexManager := indexmanager.New(store.WorkerutilIndexStore(s))
+	indexManager := indexmanager.New(store.WorkerutilIndexStore(s), indexmanager.ManagerOptions{
+		MaxTransactions:       10,               // TODO - configure
+		RequeueDelay:          time.Second * 10, // TODO - configure
+		DeathThreshold:        time.Second * 10, // TODO - configure
+		CleanupInterval:       time.Second * 10, // TODO - configure
+		UnreportedIndexMaxAge: time.Second * 10, // TODO - configure
+	})
 	server := server.New(indexManager)
 	indexResetter := resetter.NewIndexResetter(s, resetInterval, resetterMetrics)
 

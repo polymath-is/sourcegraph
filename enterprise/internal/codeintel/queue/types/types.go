@@ -25,4 +25,8 @@ type CompleteRequest struct {
 type HeartbeatRequest struct {
 	// IndexerName is a unique name identifying the requesting index agent.
 	IndexerName string `json:"indexerName"`
+
+	// IndexIDs is a list of index identifiers which are currently being processed
+	// by the index agent.
+	IndexIDs []int `json:"indexIds"`
 }

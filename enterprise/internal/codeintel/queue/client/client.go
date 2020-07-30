@@ -21,10 +21,20 @@ import (
 	"golang.org/x/net/context/ctxhttp"
 )
 
+// Client is the interface to the precise-code-intel index queue.
 type Client interface {
+	// Dequeue returns a queued index record for processing. This record can be marked as completed
+	// or failed by calling Complete with the same identifier. While processing, the identifier of
+	// the record must appear in all heartbeat requests.
 	Dequeue(ctx context.Context) (index store.Index, _ bool, _ error)
+
+	// Complete marks the target index record as complete or errored depending on the existence of an
+	// error message.
 	Complete(ctx context.Context, indexID int, indexErr error) error
-	Heartbeat(ctx context.Context) error
+
+	// Heartbeat hints to the index queue that the indexer system is has not been lost and should not
+	// release any of the index records assigned to the index agent.
+	Heartbeat(ctx context.Context, indexIDs []int) error
 }
 
 type client struct {
@@ -42,10 +52,11 @@ var requestMeter = metrics.NewRequestMeter("precise_code_intel_index_queue", "To
 // ot.Transport will propagate opentracing spans.
 var defaultTransport = &ot.Transport{
 	RoundTripper: requestMeter.Transport(&http.Transport{}, func(u *url.URL) string {
-		return u.Path // TODO - determine names here
+		return u.Path // TODO - determine metric names here
 	}),
 }
 
+// NewClient creates a new Client with the given unique name targetting hte given external frontend API.
 func NewClient(indexerName, frontendURL string) Client {
 	return &client{
 		indexerName: indexerName,
@@ -55,6 +66,9 @@ func NewClient(indexerName, frontendURL string) Client {
 	}
 }
 
+// Dequeue returns a queued index record for processing. This record can be marked as completed
+// or failed by calling Complete with the same identifier. While processing, the identifier of
+// the record must appear in all heartbeat requests.
 func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ error) {
 	url, err := makeQueueURL(c.frontendURL, "dequeue")
 	if err != nil {
@@ -84,6 +98,8 @@ func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ erro
 	return index, true, nil
 }
 
+// Complete marks the target index record as complete or errored depending on the existence of an
+// error message.
 func (c *client) Complete(ctx context.Context, indexID int, indexErr error) error {
 	url, err := makeQueueURL(c.frontendURL, "complete")
 	if err != nil {
@@ -106,7 +122,9 @@ func (c *client) Complete(ctx context.Context, indexID int, indexErr error) erro
 	return c.doAndDrop(ctx, "POST", url, payload)
 }
 
-func (c *client) Heartbeat(ctx context.Context) error {
+// Heartbeat hints to the index queue that the indexer system is has not been lost and should not
+// release any of the index records assigned to the index agent.
+func (c *client) Heartbeat(ctx context.Context, indexIDs []int) error {
 	url, err := makeQueueURL(c.frontendURL, "heartbeat")
 	if err != nil {
 		return err
@@ -114,6 +132,7 @@ func (c *client) Heartbeat(ctx context.Context) error {
 
 	payload, err := marshalPayload(types.HeartbeatRequest{
 		IndexerName: c.indexerName,
+		IndexIDs:    indexIDs,
 	})
 	if err != nil {
 		return err

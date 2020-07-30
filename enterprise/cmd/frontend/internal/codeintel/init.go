@@ -70,10 +70,6 @@ func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 		return codeintelhttpapi.NewUploadHandler(store, bundleManagerClient, false)
 	}
 
-	//
-	// TODO -rename redirect instead of proxy then, dumbo
-	//
-
 	enterpriseServices.NewCodeIntelInternalProxyHandler = func() http.Handler {
 		base := mux.NewRouter().PathPrefix("/.internal-code-intel/").Subrouter()
 		base.StrictSlash(true)
@@ -85,13 +81,13 @@ func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 		base.Path("/git/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			location, err := url.Parse("http://localhost:3090/.internal/git/" + mux.Vars(r)["rest"])
 			if err != nil {
-				fmt.Printf("OH NO: %s\n", err)
+				fmt.Printf("OH NO: %s\n", err) // TODO - log
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			location.RawQuery = r.URL.RawQuery
 
-			// TODO - call the handlers directly if possible
+			// TODO - do a reverse proxy not a redirect here, or call the handlers directly if possible
 			w.Header().Set("Location", location.String())
 			w.WriteHeader(http.StatusTemporaryRedirect)
 		})
@@ -99,7 +95,7 @@ func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 		base.Path("/index-queue/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			location, err := url.Parse(indexerURL + "/" + mux.Vars(r)["rest"])
 			if err != nil {
-				fmt.Printf("OH NO: %s\n", err)
+				fmt.Printf("OH NO: %s\n", err) // TODO - log
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}

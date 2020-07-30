@@ -1,56 +1,77 @@
 package indexer
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os/exec"
+	"sync"
 )
 
+// TODO - document
 func command(ctx context.Context, command string, args ...string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("empty args")
 	}
 
-	indexCmd := exec.CommandContext(ctx, command, args...)
-	indexCmd.Stdout = pipe("stdout")
-	indexCmd.Stderr = pipe("stderr")
-
-	if err := indexCmd.Start(); err != nil {
+	cmd, stdout, stderr, err := makeCommand(ctx, command, args...)
+	if err != nil {
 		return err
 	}
 
-	if err := indexCmd.Wait(); err != nil {
+	wg := parallel(
+		func() { processStream("stdout", stdout) },
+		func() { processStream("stderr", stderr) },
+	)
+
+	if err := cmd.Start(); err != nil {
 		return err
 	}
 
-	// TODO - return logs for storage/surfacing
+	wg.Wait()
+
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-const PipeBufferSize = 1024
+func makeCommand(ctx context.Context, command string, args ...string) (_ *exec.Cmd, stdout, stderr io.Reader, err error) {
+	cmd := exec.CommandContext(ctx, command, args...)
 
-func pipe(prefix string) io.WriteCloser {
-	pr, pw := io.Pipe()
+	stdout, err = cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
-	go func() {
-		// TODO - close pipe
-		buf := make([]byte, PipeBufferSize)
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
-		for {
-			n, err := pr.Read(buf)
-			if n > 0 {
-				fmt.Printf("%s: %s\n", prefix, buf[:n])
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				// TODO - handle error reasonably
-				panic(err.Error())
-			}
-		}
-	}()
+	return cmd, stdout, stderr, nil
+}
 
-	return pw
+func parallel(funcs ...func()) *sync.WaitGroup {
+	var wg sync.WaitGroup
+
+	for _, f := range funcs {
+		wg.Add(1)
+		go func(f func()) {
+			defer wg.Done()
+			f()
+		}(f)
+	}
+
+	return &wg
+}
+
+func processStream(prefix string, r io.Reader) {
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		fmt.Printf("%s: %s\n", prefix, scanner.Text())
+	}
 }

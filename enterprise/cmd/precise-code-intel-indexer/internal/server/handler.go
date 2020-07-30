@@ -34,12 +34,10 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !dequeued {
-		fmt.Printf("WTH\n")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	fmt.Printf("Index: %v\n", index)
 	writeJSON(w, index)
 }
 
@@ -71,6 +69,6 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.indexManager.Heartbeat(payload)
+	s.indexManager.Heartbeat(r.Context(), payload)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -12,15 +12,19 @@ import (
 	"time"
 
 	"github.com/efritz/glock"
+	"github.com/google/uuid"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/client"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 )
 
+// TODO - document
 type Indexer struct {
 	options  IndexerOptions
 	clock    glock.Clock
+	indexIDs map[int]struct{}
+	m        sync.RWMutex    // protects indexIDs
 	ctx      context.Context // root context passed to commands
 	cancel   func()          // cancels the root context
 	wg       sync.WaitGroup  // tracks active background goroutines
@@ -37,6 +41,7 @@ type IndexerOptions struct {
 
 const ImageBinary = "docker" // TODO - configure
 
+// TODO - document
 func NewIndexer(ctx context.Context, options IndexerOptions) *Indexer {
 	return newIndexer(ctx, options, glock.NewRealClock())
 }
@@ -47,6 +52,7 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 	return &Indexer{
 		options:  options,
 		clock:    clock,
+		indexIDs: map[int]struct{}{},
 		ctx:      ctx,
 		cancel:   cancel,
 		finished: make(chan struct{}),
@@ -58,8 +64,7 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 func (i *Indexer) Start() {
 	defer close(i.finished)
 
-	indexerName := "me" // TODO - construct
-	client := client.NewClient(indexerName, i.options.FrontendURL)
+	client := client.NewClient(uuid.New().String(), i.options.FrontendURL)
 
 	i.wg.Add(2)
 	go i.poll(client)
@@ -86,6 +91,9 @@ loop:
 
 		delay := i.options.PollInterval
 		if dequeued {
+			i.addID(index.ID)
+			defer i.removeID(index.ID)
+
 			log15.Info("Dequeued index for processing", "id", index.ID)
 
 			indexErr := i.process(index)
@@ -127,8 +135,7 @@ func (i *Indexer) heartbeat(client client.Client) {
 
 loop:
 	for {
-		// TODO - send current state
-		if err := client.Heartbeat(i.ctx); err != nil {
+		if err := client.Heartbeat(i.ctx, i.getIDs()); err != nil {
 			for ex := err; ex != nil; ex = errors.Unwrap(ex) {
 				if err == i.ctx.Err() {
 					break loop
@@ -153,6 +160,32 @@ loop:
 func (i *Indexer) Stop() {
 	i.cancel()
 	<-i.finished
+}
+
+// getIDs returns a slice of index identifiers that are currently being processed.
+func (i *Indexer) getIDs() (ids []int) {
+	i.m.RLock()
+	defer i.m.RUnlock()
+
+	for id := range i.indexIDs {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
+// addID adds the given index identifier from the set of currently processing indexes.
+func (i *Indexer) addID(indexID int) {
+	i.m.Lock()
+	defer i.m.Unlock()
+	i.indexIDs[indexID] = struct{}{}
+}
+
+// removeID removes the given index identifier from the set of currently processing indexes.
+func (i *Indexer) removeID(indexID int) {
+	i.m.Lock()
+	defer i.m.Unlock()
+	delete(i.indexIDs, indexID)
 }
 
 // process clones the target code into a temporary directory, invokes the target indexer in
@@ -206,7 +239,7 @@ func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error)
 
 	commands := [][]string{
 		{"-C", tempDir, "init"},
-		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit},
+		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit}, // TODO - somehow rate limit this
 		{"-C", tempDir, "checkout", commit},
 	}
 
