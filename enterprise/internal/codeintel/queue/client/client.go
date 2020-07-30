@@ -1,4 +1,4 @@
-package indexer
+package client
 
 import (
 	"bytes"
@@ -14,29 +14,31 @@ import (
 
 	"github.com/opentracing-contrib/go-stdlib/nethttp"
 	"github.com/opentracing/opentracing-go/ext"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"github.com/sourcegraph/sourcegraph/internal/metrics"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 	"golang.org/x/net/context/ctxhttp"
 )
 
-type InternalCodeIntelClient interface {
+type Client interface {
 	Dequeue(ctx context.Context) (index store.Index, _ bool, _ error)
 	Complete(ctx context.Context, indexID int, indexErr error) error
 	Heartbeat(ctx context.Context) error
 }
 
-type internalCodeIntelClient struct {
+type client struct {
+	indexerName string
 	frontendURL string
 	httpClient  *http.Client
 	userAgent   string
 }
 
-var _ InternalCodeIntelClient = &internalCodeIntelClient{}
+var _ Client = &client{}
 
-var requestMeter = metrics.NewRequestMeter("precise_code_intel_indexer", "Total number of requests sent to internal code intel frontend routes.")
+var requestMeter = metrics.NewRequestMeter("precise_code_intel_index_queue", "Total number of requests sent to precise code intel index queue.")
 
-// defaultTransport is the default transport for internal code intel clients.
+// defaultTransport is the default transport for precise code intel index queue clients.
 // ot.Transport will propagate opentracing spans.
 var defaultTransport = &ot.Transport{
 	RoundTripper: requestMeter.Transport(&http.Transport{}, func(u *url.URL) string {
@@ -44,28 +46,29 @@ var defaultTransport = &ot.Transport{
 	}),
 }
 
-func NewInternalCodeIntelClient(frontendURL string) *internalCodeIntelClient {
-	return &internalCodeIntelClient{
+func NewClient(indexerName, frontendURL string) Client {
+	return &client{
+		indexerName: indexerName,
 		httpClient:  &http.Client{Transport: defaultTransport},
 		frontendURL: frontendURL,
 		userAgent:   filepath.Base(os.Args[0]),
 	}
 }
 
-func (c *internalCodeIntelClient) Dequeue(ctx context.Context) (index store.Index, _ bool, _ error) {
+func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ error) {
 	url, err := makeQueueURL(c.frontendURL, "dequeue")
 	if err != nil {
 		return store.Index{}, false, err
 	}
 
-	payload, err := json.Marshal(map[string]interface{}{
-		"indexerName": IndexerName, // TODO - pass as struct var
+	payload, err := marshalPayload(types.DequeueRequest{
+		IndexerName: c.indexerName,
 	})
 	if err != nil {
 		return store.Index{}, false, err
 	}
 
-	hasContent, body, err := c.do(ctx, "POST", url, bytes.NewReader(payload))
+	hasContent, body, err := c.do(ctx, "POST", url, payload)
 	if err != nil {
 		return store.Index{}, false, err
 	}
@@ -81,46 +84,46 @@ func (c *internalCodeIntelClient) Dequeue(ctx context.Context) (index store.Inde
 	return index, true, nil
 }
 
-func (c *internalCodeIntelClient) Complete(ctx context.Context, indexID int, indexErr error) error {
+func (c *client) Complete(ctx context.Context, indexID int, indexErr error) error {
 	url, err := makeQueueURL(c.frontendURL, "complete")
 	if err != nil {
 		return err
 	}
 
-	payloadValues := map[string]interface{}{
-		"indexerName": IndexerName, // TODO - pass as struct var
-		"indexId":     indexID,
+	rawPayload := types.CompleteRequest{
+		IndexerName: c.indexerName,
+		IndexID:     indexID,
 	}
 	if indexErr != nil {
-		payloadValues["errorMessage"] = indexErr.Error()
+		rawPayload.ErrorMessage = indexErr.Error()
 	}
 
-	payload, err := json.Marshal(payloadValues)
+	payload, err := marshalPayload(rawPayload)
 	if err != nil {
 		return err
 	}
 
-	return c.doAndDrop(ctx, "POST", url, bytes.NewReader(payload))
+	return c.doAndDrop(ctx, "POST", url, payload)
 }
 
-func (c *internalCodeIntelClient) Heartbeat(ctx context.Context) error {
+func (c *client) Heartbeat(ctx context.Context) error {
 	url, err := makeQueueURL(c.frontendURL, "heartbeat")
 	if err != nil {
 		return err
 	}
 
-	payload, err := json.Marshal(map[string]interface{}{
-		"indexerName": IndexerName, // TODO - pass as struct var
+	payload, err := marshalPayload(types.HeartbeatRequest{
+		IndexerName: c.indexerName,
 	})
 	if err != nil {
 		return err
 	}
 
-	return c.doAndDrop(ctx, "POST", url, bytes.NewReader(payload))
+	return c.doAndDrop(ctx, "POST", url, payload)
 }
 
 // doAndDrop performs an HTTP request to the frontend and ignores the body contents.
-func (c *internalCodeIntelClient) doAndDrop(ctx context.Context, method string, url *url.URL, payload io.Reader) error {
+func (c *client) doAndDrop(ctx context.Context, method string, url *url.URL, payload io.Reader) error {
 	hasContent, body, err := c.do(ctx, method, url, payload)
 	if err != nil {
 		return err
@@ -132,7 +135,7 @@ func (c *internalCodeIntelClient) doAndDrop(ctx context.Context, method string, 
 }
 
 // do performs an HTTP request to the frontend and returns the body content as a reader.
-func (c *internalCodeIntelClient) do(ctx context.Context, method string, url *url.URL, body io.Reader) (hasContent bool, _ io.ReadCloser, err error) {
+func (c *client) do(ctx context.Context, method string, url *url.URL, body io.Reader) (hasContent bool, _ io.ReadCloser, err error) {
 	span, ctx := ot.StartSpanFromContext(ctx, ".do")
 	defer func() {
 		if err != nil {
@@ -154,7 +157,7 @@ func (c *internalCodeIntelClient) do(ctx context.Context, method string, url *ur
 	req, ht := nethttp.TraceRequest(
 		span.Tracer(),
 		req,
-		nethttp.OperationName("Code Intel Internal Client"),
+		nethttp.OperationName("Code Intel Index Queue Client"),
 		nethttp.ClientTrace(false),
 	)
 	defer ht.Finish()
@@ -184,4 +187,13 @@ func makeQueueURL(baseURL, op string) (*url.URL, error) {
 	}
 
 	return base.ResolveReference(&url.URL{Path: path.Join(".internal-code-intel", "index-queue", op)}), nil
+}
+
+func marshalPayload(payload interface{}) (io.Reader, error) {
+	content, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(content), nil
 }

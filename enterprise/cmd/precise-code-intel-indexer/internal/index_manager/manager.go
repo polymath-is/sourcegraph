@@ -10,15 +10,26 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 )
 
-// TODO - move to new package
-
 // TODO - document
-type Manager struct {
+type Manager interface {
+	Start()
+	Stop()
+	Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error)
+	Complete(ctx context.Context, request CompleteRequest) (bool, error)
+	Heartbeat(request HeartbeatRequest)
+}
+
+type manager struct {
 	store    workerutil.Store
 	m        sync.Mutex
 	indexers map[string]*IndexerMeta
 	requests chan interface{}
+	ctx      context.Context // root context passed to the database
+	cancel   func()          // cancels the root context
+	finished chan struct{}   // signals that Start has finished
 }
+
+var _ Manager = &manager{}
 
 // TODO - document
 type IndexerMeta struct {
@@ -27,40 +38,91 @@ type IndexerMeta struct {
 }
 
 // TODO - document
-func NewManager(s workerutil.Store) *Manager {
-	return &Manager{
+func New(s workerutil.Store) Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &manager{
 		store:    s,
 		indexers: map[string]*IndexerMeta{},
 		requests: make(chan interface{}),
+		ctx:      ctx,
+		cancel:   cancel,
+		finished: make(chan struct{}),
 	}
 }
 
 // TODO - document
-func (m *Manager) Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error) {
+// Start runs the poll and heartbeat loops. This method blocks until all background
+// goroutines have exited.
+func (m *manager) Start() {
+	defer close(m.requests)
+	defer close(m.finished)
+
+loop:
+	for {
+		select {
+		case req := <-m.requests:
+			m.handle(req)
+
+		case <-time.After(time.Second): // TODO - configure
+			m.cleanup()
+
+		case <-m.ctx.Done():
+			break loop
+		}
+	}
+}
+
+// TODO - document
+// Stop will cause the indexer loop to exit after the current iteration. This is done by
+// canceling the context passed to the subprocess functions (which may cause the currently
+// processing unit of work to fail). This method blocks until all background goroutines have
+// exited.
+func (m *manager) Stop() {
+	m.cancel()
+	<-m.finished
+}
+
+// TODO - document
+func (m *manager) Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error) {
 	envelope := newDequeueRequestEnvelope(ctx, request)
-	m.requests <- envelope
+
+	select {
+	case m.requests <- envelope:
+	case <-ctx.Done():
+		return store.Index{}, false, ctx.Err()
+	}
 
 	select {
 	case response := <-envelope.Response:
-		if response.Error != nil {
+		if response.Error != nil || !response.Dequeued {
 			return store.Index{}, false, response.Error
-		}
-		if response.Dequeued {
-			return store.Index{}, false, nil
 		}
 
 		m.updateIndexer(request.IndexerName, response.Index)
 		return response.Index.Index, true, nil
 
 	case <-ctx.Done():
+		go func() {
+			// TODO - document
+			if response := <-envelope.Response; response.Dequeued {
+				_ = response.Index.Tx.Done(ctx.Err())
+			}
+		}()
+
 		return store.Index{}, false, ctx.Err()
 	}
 }
 
 // TODO - document
-func (m *Manager) Complete(ctx context.Context, request CompleteRequest) (bool, error) {
+func (m *manager) Complete(ctx context.Context, request CompleteRequest) (bool, error) {
 	envelope := newCompleteRequestEnvelope(ctx, request)
-	m.requests <- envelope
+
+	select {
+	case m.requests <- envelope:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 
 	select {
 	case response := <-envelope.Response:
@@ -72,14 +134,14 @@ func (m *Manager) Complete(ctx context.Context, request CompleteRequest) (bool, 
 }
 
 // TODO - document
-func (m *Manager) Heartbeat(request HeartbeatRequest) {
+func (m *manager) Heartbeat(request HeartbeatRequest) {
 	// TODO - heartbeat also needs to send all of the outstanding
 	// requests so in case one gets lost we can requeue it properly.
 	m.updateIndexer(request.IndexerName)
 }
 
 // TODO - document
-func (m *Manager) updateIndexer(indexerName string, indexes ...IndexMeta) {
+func (m *manager) updateIndexer(indexerName string, indexes ...IndexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
@@ -93,37 +155,7 @@ func (m *Manager) updateIndexer(indexerName string, indexes ...IndexMeta) {
 }
 
 // TODO - document
-func (m *Manager) Start() {
-	ctx := context.Background()
-
-	for {
-		select {
-		case req := <-m.requests:
-			m.handle(req)
-
-		case <-time.After(time.Second):
-			for _, index := range m.pruneIndexes() {
-				if err := index.Tx.Requeue(ctx, index.Index.ID, time.Now().Add(time.Second*5)); err != nil {
-					log15.Error("failed to requeue index", "error", err)
-				}
-
-				if err := index.Tx.Done(nil); err != nil {
-					log15.Error("failed to close transaction", "error", err)
-				}
-			}
-		}
-
-		// TODO - stop?
-	}
-}
-
-// TODO - document
-func (m *Manager) Stop() {
-	// TODO - implement
-}
-
-// TODO - document
-func (m *Manager) handle(rawRequest interface{}) {
+func (m *manager) handle(rawRequest interface{}) {
 	switch request := rawRequest.(type) {
 	case dequeueRequestEnvelope:
 		request.Response <- m.dequeue(request.DequeueRequest)
@@ -134,10 +166,10 @@ func (m *Manager) handle(rawRequest interface{}) {
 }
 
 // TODO - document
-func (m *Manager) dequeue(request DequeueRequest) DequeueResponse {
+func (m *manager) dequeue(request DequeueRequest) DequeueResponse {
 	ctx := context.Background() // TODO - combine self, request.Context
 
-	// TODo - why is it that we block on a query once we
+	// TODO - why is it that we block on a query once we
 	// have so many running transactions?
 
 	// TODO - make configurable
@@ -162,7 +194,7 @@ func (m *Manager) dequeue(request DequeueRequest) DequeueResponse {
 }
 
 // TODO - document
-func (m *Manager) countTotalIndexes() int {
+func (m *manager) countTotalIndexes() int {
 	m.m.Lock()
 	defer m.m.Unlock()
 
@@ -175,7 +207,7 @@ func (m *Manager) countTotalIndexes() int {
 }
 
 // TODO - document
-func (m *Manager) complete(request CompleteRequest) CompleteResponse {
+func (m *manager) complete(request CompleteRequest) CompleteResponse {
 	index, ok := m.removeIndex(request.IndexerName, request.IndexID)
 	if !ok {
 		return CompleteResponse{}
@@ -189,7 +221,7 @@ func (m *Manager) complete(request CompleteRequest) CompleteResponse {
 }
 
 // TODO - document
-func (m *Manager) removeIndex(indexerName string, indexID int) (IndexMeta, bool) {
+func (m *manager) removeIndex(indexerName string, indexID int) (IndexMeta, bool) {
 	m.m.Lock()
 	defer m.m.Unlock()
 
@@ -210,7 +242,7 @@ func (m *Manager) removeIndex(indexerName string, indexID int) (IndexMeta, bool)
 }
 
 // TODO - document
-func (m *Manager) completeIndex(index IndexMeta, errorMessage string) (err error) {
+func (m *manager) completeIndex(index IndexMeta, errorMessage string) (err error) {
 	ctx := context.Background() // TODO - combine self, request.Context
 
 	if errorMessage == "" {
@@ -223,7 +255,22 @@ func (m *Manager) completeIndex(index IndexMeta, errorMessage string) (err error
 }
 
 // TODO - document
-func (m *Manager) pruneIndexes() (indexes []IndexMeta) {
+func (m *manager) cleanup() {
+	ctx := context.Background()
+
+	for _, index := range m.pruneIndexes() {
+		if err := index.Tx.Requeue(ctx, index.Index.ID, time.Now().Add(time.Second*5)); err != nil {
+			log15.Error("failed to requeue index", "error", err)
+		}
+
+		if err := index.Tx.Done(nil); err != nil {
+			log15.Error("failed to close transaction", "error", err)
+		}
+	}
+}
+
+// TODO - document
+func (m *manager) pruneIndexes() (indexes []IndexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
 

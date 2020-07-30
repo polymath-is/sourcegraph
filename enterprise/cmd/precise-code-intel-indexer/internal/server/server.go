@@ -17,12 +17,12 @@ import (
 const Port = 3189
 
 type Server struct {
-	indexManager *indexmanager.Manager
+	indexManager indexmanager.Manager
 	server       *http.Server
 	once         sync.Once
 }
 
-func New(indexManager *indexmanager.Manager) *Server {
+func New(indexManager indexmanager.Manager) *Server {
 	host := ""
 	if env.InsecureDev {
 		host = "127.0.0.1"

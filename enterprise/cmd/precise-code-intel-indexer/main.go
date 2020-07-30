@@ -50,12 +50,12 @@ func main() {
 	}
 
 	s := store.NewObserved(mustInitializeStore(), observationContext)
-
 	MustRegisterQueueMonitor(observationContext.Registerer, s)
+
 	resetterMetrics := resetter.NewResetterMetrics(prometheus.DefaultRegisterer)
 	indexabilityUpdaterMetrics := indexabilityupdater.NewUpdaterMetrics(prometheus.DefaultRegisterer)
 	schedulerMetrics := scheduler.NewSchedulerMetrics(prometheus.DefaultRegisterer)
-	indexManager := indexmanager.NewManager(store.WorkerutilIndexStore(s))
+	indexManager := indexmanager.New(store.WorkerutilIndexStore(s))
 	server := server.New(indexManager)
 	indexResetter := resetter.NewIndexResetter(s, resetInterval, resetterMetrics)
 

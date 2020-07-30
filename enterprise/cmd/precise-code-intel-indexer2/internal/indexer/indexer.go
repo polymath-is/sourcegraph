@@ -14,6 +14,7 @@ import (
 	"github.com/efritz/glock"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/client"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 )
 
@@ -34,7 +35,6 @@ type IndexerOptions struct {
 	Metrics               IndexerMetrics
 }
 
-const IndexerName = "foobar" // TODO - construct
 const ImageBinary = "docker" // TODO - configure
 
 func NewIndexer(ctx context.Context, options IndexerOptions) *Indexer {
@@ -58,7 +58,8 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 func (i *Indexer) Start() {
 	defer close(i.finished)
 
-	client := NewInternalCodeIntelClient(i.options.FrontendURL)
+	indexerName := "me" // TODO - construct
+	client := client.NewClient(indexerName, i.options.FrontendURL)
 
 	i.wg.Add(2)
 	go i.poll(client)
@@ -67,7 +68,7 @@ func (i *Indexer) Start() {
 }
 
 // poll begins polling for work from the API and indexing repositories.
-func (i *Indexer) poll(client InternalCodeIntelClient) {
+func (i *Indexer) poll(client client.Client) {
 	defer i.wg.Done()
 
 loop:
@@ -121,7 +122,7 @@ loop:
 
 // heartbeat sends a periodic request to the frontend to keep the database transactions
 // locking the indexes dequeued by this instance alive.
-func (i *Indexer) heartbeat(client InternalCodeIntelClient) {
+func (i *Indexer) heartbeat(client client.Client) {
 	defer i.wg.Done()
 
 loop:

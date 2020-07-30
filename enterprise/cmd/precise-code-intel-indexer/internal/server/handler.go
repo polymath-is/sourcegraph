@@ -34,10 +34,12 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !dequeued {
+		fmt.Printf("WTH\n")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
+	fmt.Printf("Index: %v\n", index)
 	writeJSON(w, index)
 }
 

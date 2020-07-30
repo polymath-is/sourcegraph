@@ -18,12 +18,14 @@ type IndexMeta struct {
 	Tx    workerutil.Store
 }
 
+// TODO - document
 type DequeueResponse struct {
 	Index    IndexMeta
 	Dequeued bool
 	Error    error
 }
 
+// TODO - document
 type CompleteResponse struct {
 	Found bool
 	Error error
