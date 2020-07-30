@@ -2,14 +2,12 @@ package indexer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,10 +27,15 @@ type Indexer struct {
 }
 
 type IndexerOptions struct {
-	FrontendURL string
-	Interval    time.Duration
-	Metrics     IndexerMetrics
+	FrontendURL           string
+	FrontendURLFromDocker string
+	PollInterval          time.Duration
+	HeartbeatInterval     time.Duration
+	Metrics               IndexerMetrics
 }
+
+const IndexerName = "foobar" // TODO - construct
+const ImageBinary = "docker" // TODO - configure
 
 func NewIndexer(ctx context.Context, options IndexerOptions) *Indexer {
 	return newIndexer(ctx, options, glock.NewRealClock())
@@ -50,34 +53,62 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 	}
 }
 
-// Start begins polling for work from the API and indexing repositories.
+// Start runs the poll and heartbeat loops. This method blocks until all background
+// goroutines have exited.
 func (i *Indexer) Start() {
 	defer close(i.finished)
 
-	// TODO - configure, or otherwise proxy from frontend
-	baseURL := "http://localhost:3189"
+	client := NewInternalCodeIntelClient(i.options.FrontendURL)
 
-	//
-	// TODO - need to add heartbeat
-	//
+	i.wg.Add(2)
+	go i.poll(client)
+	go i.heartbeat(client)
+	i.wg.Wait()
+}
+
+// poll begins polling for work from the API and indexing repositories.
+func (i *Indexer) poll(client InternalCodeIntelClient) {
+	defer i.wg.Done()
 
 loop:
 	for {
-		index, dequeued, err := dequeue(baseURL)
+		index, dequeued, err := client.Dequeue(i.ctx)
 		if err != nil {
-			log15.Error("failed to poll index job", "err", err)
+			for ex := err; ex != nil; ex = errors.Unwrap(ex) {
+				if err == i.ctx.Err() {
+					break loop
+				}
+			}
+
+			log15.Error("Failed to dequeue index", "err", err)
 		}
 
-		delay := i.options.Interval
+		delay := i.options.PollInterval
 		if dequeued {
-			delay = 0
+			log15.Info("Dequeued index for processing", "id", index.ID)
 
-			indexErr := process(i.ctx, i.options.FrontendURL, index)
-			if err := complete(baseURL, index.ID, indexErr); err != nil {
-				log15.Error("OOPS", "err", err)
+			indexErr := i.process(index)
+
+			if err := client.Complete(i.ctx, index.ID, indexErr); err != nil {
+				for ex := err; ex != nil; ex = errors.Unwrap(ex) {
+					if err == i.ctx.Err() {
+						break loop
+					}
+				}
+
+				log15.Error("Failed to finalize index", "id", index.ID, "err", err)
+			} else {
+				if indexErr == nil {
+					log15.Info("Marked index as complete", "id", index.ID)
+				} else {
+					log15.Warn("Marked index as errored", "id", index.ID, "err", indexErr)
+				}
 			}
-		} else {
-			fmt.Printf("NOTHING TO PROCESS\n")
+
+			// If we had a successful dequeue, do not wait the poll interval.
+			// Just attempt to dequeue and process the next unit of work while
+			// there are indexes to be processed.
+			delay = 0
 		}
 
 		select {
@@ -86,73 +117,47 @@ loop:
 			break loop
 		}
 	}
-
-	i.wg.Wait()
 }
 
-// Stop will cause the indexer loop to exit after the current iteration. This is done by canceling the
-// context passed to the subprocess functions (which may cause the currently processing unit of work
-// to fail). This method blocks until all background goroutines have exited.
+// heartbeat sends a periodic request to the frontend to keep the database transactions
+// locking the indexes dequeued by this instance alive.
+func (i *Indexer) heartbeat(client InternalCodeIntelClient) {
+	defer i.wg.Done()
+
+loop:
+	for {
+		// TODO - send current state
+		if err := client.Heartbeat(i.ctx); err != nil {
+			for ex := err; ex != nil; ex = errors.Unwrap(ex) {
+				if err == i.ctx.Err() {
+					break loop
+				}
+			}
+
+			log15.Error("Failed to perform heartbeat", "err", err)
+		}
+
+		select {
+		case <-time.After(i.options.HeartbeatInterval):
+		case <-i.ctx.Done():
+			break loop
+		}
+	}
+}
+
+// Stop will cause the indexer loop to exit after the current iteration. This is done by
+// canceling the context passed to the subprocess functions (which may cause the currently
+// processing unit of work to fail). This method blocks until all background goroutines have
+// exited.
 func (i *Indexer) Stop() {
 	i.cancel()
 	<-i.finished
 }
 
-// TODO - configure
-const IndexerName = "foobar!!"
-
-func dequeue(baseURL string) (index store.Index, _ bool, _ error) {
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/dequeue?indexerName=%s", baseURL, IndexerName), nil)
-	if err != nil {
-		return store.Index{}, false, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return store.Index{}, false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent {
-		return store.Index{}, false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return store.Index{}, false, fmt.Errorf("unexpected status code %d", resp.StatusCode)
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&index); err != nil {
-		return store.Index{}, false, err
-	}
-
-	return index, true, nil
-}
-
-func complete(baseURL string, indexID int, err error) error {
-	var errorMessage string
-	if err != nil {
-		errorMessage = fmt.Sprintf("&errorMessage=%s", err.Error())
-	}
-
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/complete?indexerName=%s&indexId=%d%s", baseURL, IndexerName, indexID, errorMessage), nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("unexpected status code %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
-func process(ctx context.Context, baseURL string, index store.Index) error {
-	repoDir, err := fetchRepository(ctx, baseURL, index.RepositoryID, index.RepositoryName, index.Commit)
+// process clones the target code into a temporary directory, invokes the target indexer in
+// a fresh docker container, and uploads the results to the external frontend API.
+func (i *Indexer) process(index store.Index) error {
+	repoDir, err := i.fetchRepository(index.RepositoryName, index.Commit)
 	if err != nil {
 		return err
 	}
@@ -160,23 +165,29 @@ func process(ctx context.Context, baseURL string, index store.Index) error {
 		_ = os.RemoveAll(repoDir)
 	}()
 
-	indexCommand := []string{
-		"run",
-		"--rm",
-		"-v", "`pwd`:/data",
-		"-w", "/data",
-		"sourcegraph/lsif-go:latest",
-		"bash", "-c", fmt.Sprintf("'lsif-go && src lsif upload'"),
+	indexAndUploadCommand := []string{
+		"lsif-go",
+		"&&",
+		"src", "-endpoint", i.options.FrontendURLFromDocker, "lsif", "upload", "-repo", index.RepositoryName, "-commit", index.Commit,
 	}
 
-	if err := command(repoDir, "docker", indexCommand...); err != nil {
+	if err := command(
+		i.ctx,
+		ImageBinary, "run", "--rm",
+		"-v", fmt.Sprintf("%s:/data", repoDir),
+		"-w", "/data",
+		"sourcegraph/lsif-go:latest",
+		"bash", "-c", strings.Join(indexAndUploadCommand, " "),
+	); err != nil {
 		return errors.Wrap(err, "failed to index repository")
 	}
 
 	return nil
 }
 
-func fetchRepository(ctx context.Context, frontendURL string, repositoryID int, repositoryName string, commit string) (string, error) {
+// fetchRepository creates a temporary directory and performs a git checkout with the given repository
+// and commit. If there is an error, the temporary directory is removed.
+func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error) {
 	tempDir, err := ioutil.TempDir("", "")
 	if err != nil {
 		return "", err
@@ -187,42 +198,31 @@ func fetchRepository(ctx context.Context, frontendURL string, repositoryID int, 
 		}
 	}()
 
-	frontendX, err := url.Parse(frontendURL)
+	cloneURL, err := makeCloneURL(i.options.FrontendURL, repositoryName)
 	if err != nil {
 		return "", err
 	}
 
-	if err := command(tempDir, "git", "init", "--bare"); err != nil {
-		return "", err
+	commands := [][]string{
+		{"-C", tempDir, "init"},
+		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit},
+		{"-C", tempDir, "checkout", commit},
 	}
 
-	cloneURL := frontendX.ResolveReference(&url.URL{
-		Path: path.Join("/.internal/git", repositoryName),
-	})
-
-	fetchArgs := []string{
-		"-C", tempDir,
-		"-c", "protocol.version=2",
-		"fetch",
-		// "--depth=1",
-		cloneURL.String(),
-		commit,
-	}
-
-	if err := command(tempDir, "git", fetchArgs...); err != nil {
-		return "", err
+	for _, args := range commands {
+		if err := command(i.ctx, "git", args...); err != nil {
+			return "", errors.Wrap(err, fmt.Sprintf("failed `git %s`", strings.Join(args, " ")))
+		}
 	}
 
 	return tempDir, nil
 }
 
-func command(dir, command string, args ...string) error {
-	indexCmd := exec.Command(command, args...)
-	indexCmd.Dir = dir
-
-	if output, err := indexCmd.CombinedOutput(); err != nil {
-		return errors.Wrap(err, fmt.Sprintf("command failed: %s\n", output))
+func makeCloneURL(baseURL, repositoryName string) (*url.URL, error) {
+	base, err := url.Parse(fmt.Sprintf("http://%s", baseURL))
+	if err != nil {
+		return nil, err
 	}
 
-	return nil
+	return base.ResolveReference(&url.URL{Path: path.Join(".internal-code-intel", "git", repositoryName)}), nil
 }

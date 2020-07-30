@@ -9,27 +9,27 @@ import (
 	"sync"
 
 	"github.com/inconshreveable/log15"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
-	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 )
 
 const Port = 3189
 
 type Server struct {
-	transactionManager *TransactionManager
-	server             *http.Server
-	once               sync.Once
+	indexManager *indexmanager.Manager
+	server       *http.Server
+	once         sync.Once
 }
 
-func New(store workerutil.Store) *Server {
+func New(indexManager *indexmanager.Manager) *Server {
 	host := ""
 	if env.InsecureDev {
 		host = "127.0.0.1"
 	}
 
 	s := &Server{
-		transactionManager: newTransactionManager(store),
+		indexManager: indexManager,
 	}
 
 	s.server = &http.Server{

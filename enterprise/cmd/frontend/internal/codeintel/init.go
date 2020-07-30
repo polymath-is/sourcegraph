@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
+	"github.com/gorilla/mux"
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -25,12 +27,17 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 )
 
-var bundleManagerURL = env.Get("PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL", "", "HTTP address for internal LSIF bundle manager server.")
+var bundleManagerURL = env.Get("PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL", "", "HTTP address for the internal LSIF bundle manager server.")
 var rawHunkCacheSize = env.Get("PRECISE_CODE_INTEL_HUNK_CACHE_CAPACITY", "1000", "Maximum number of git diff hunk objects that can be loaded into the hunk cache at once.")
+var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEXER_URL", "", "HTTP address for the internal LSIF indexer server.")
 
 func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 	if bundleManagerURL == "" {
 		return fmt.Errorf("invalid value for PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL: no value supplied")
+	}
+
+	if indexerURL == "" {
+		return fmt.Errorf("invalid value for PRECISE_CODE_INTEL_INDEXER_URL: no value supplied")
 	}
 
 	hunkCacheSize, err := strconv.ParseInt(rawHunkCacheSize, 10, 64)
@@ -59,8 +66,51 @@ func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 		hunkCache,
 	))
 
-	enterpriseServices.NewCodeIntelUploadHandler = func(internal bool) http.Handler {
-		return codeintelhttpapi.NewUploadHandler(store, bundleManagerClient, internal)
+	enterpriseServices.NewCodeIntelUploadHandler = func() http.Handler {
+		return codeintelhttpapi.NewUploadHandler(store, bundleManagerClient, false)
+	}
+
+	//
+	// TODO -rename redirect instead of proxy then, dumbo
+	//
+
+	enterpriseServices.NewCodeIntelInternalProxyHandler = func() http.Handler {
+		base := mux.NewRouter().PathPrefix("/.internal-code-intel/").Subrouter()
+		base.StrictSlash(true)
+
+		//
+		// TODO - token middleware here
+		//
+
+		base.Path("/git/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			location, err := url.Parse("http://localhost:3090/.internal/git/" + mux.Vars(r)["rest"])
+			if err != nil {
+				fmt.Printf("OH NO: %s\n", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			location.RawQuery = r.URL.RawQuery
+
+			// TODO - call the handlers directly if possible
+			w.Header().Set("Location", location.String())
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		})
+
+		base.Path("/index-queue/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			location, err := url.Parse(indexerURL + "/" + mux.Vars(r)["rest"])
+			if err != nil {
+				fmt.Printf("OH NO: %s\n", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			location.RawQuery = r.URL.RawQuery
+
+			// TODO - do a reverse proxy not a redirect here
+			w.Header().Set("Location", location.String())
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		})
+
+		return base
 	}
 
 	return nil

@@ -9,6 +9,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
 	indexabilityupdater "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/indexability_updater"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/janitor"
 	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/resetter"
@@ -49,11 +50,13 @@ func main() {
 	}
 
 	s := store.NewObserved(mustInitializeStore(), observationContext)
+
 	MustRegisterQueueMonitor(observationContext.Registerer, s)
 	resetterMetrics := resetter.NewResetterMetrics(prometheus.DefaultRegisterer)
 	indexabilityUpdaterMetrics := indexabilityupdater.NewUpdaterMetrics(prometheus.DefaultRegisterer)
 	schedulerMetrics := scheduler.NewSchedulerMetrics(prometheus.DefaultRegisterer)
-	server := server.New(store.WorkerutilIndexStore(s))
+	indexManager := indexmanager.NewManager(store.WorkerutilIndexStore(s))
+	server := server.New(indexManager)
 	indexResetter := resetter.NewIndexResetter(s, resetInterval, resetterMetrics)
 
 	indexabilityUpdater := indexabilityupdater.NewUpdater(
@@ -78,6 +81,7 @@ func main() {
 	janitorMetrics := janitor.NewJanitorMetrics(prometheus.DefaultRegisterer)
 	janitor := janitor.New(s, janitorInterval, janitorMetrics)
 
+	go indexManager.Start()
 	go server.Start()
 	go indexResetter.Start()
 	go indexabilityUpdater.Start()
@@ -101,6 +105,7 @@ func main() {
 		os.Exit(0)
 	}()
 
+	indexManager.Stop()
 	server.Stop()
 	indexResetter.Stop()
 	scheduler.Stop()

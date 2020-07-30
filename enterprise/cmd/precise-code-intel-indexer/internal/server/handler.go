@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/inconshreveable/log15"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
 )
 
 func (s *Server) handler() http.Handler {
@@ -21,9 +22,12 @@ func (s *Server) handler() http.Handler {
 
 // POST /dequeue
 func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
-	indexerName := getQuery(r, "indexerName")
+	var payload indexmanager.DequeueRequest
+	if !decodeBody(w, r, &payload) {
+		return
+	}
 
-	index, dequeued, err := s.transactionManager.Dequeue(r.Context(), indexerName)
+	index, dequeued, err := s.indexManager.Dequeue(r.Context(), payload)
 	if err != nil {
 		log15.Error("Failed to dequeue index", "err", err)
 		http.Error(w, fmt.Sprintf("failed to dequeue index: %s", err.Error()), http.StatusInternalServerError)
@@ -39,12 +43,12 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 
 // POST /complete
 func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
-	// TODO - read from body instead
-	indexerName := getQuery(r, "indexerName")
-	indexID := getQueryInt(r, "indexId")
-	indexErr := getQueryAsErr(r, "errorMessage")
+	var payload indexmanager.CompleteRequest
+	if !decodeBody(w, r, &payload) {
+		return
+	}
 
-	found, err := s.transactionManager.Complete(indexerName, indexID, indexErr)
+	found, err := s.indexManager.Complete(r.Context(), payload)
 	if err != nil {
 		log15.Error("Failed to complete index job", "err", err)
 		http.Error(w, fmt.Sprintf("failed to complete index job: %s", err.Error()), http.StatusInternalServerError)
@@ -60,7 +64,11 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 
 // POST /heartbeat
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	indexerName := getQuery(r, "indexerName")
-	s.transactionManager.Heartbeat(indexerName)
+	var payload indexmanager.HeartbeatRequest
+	if !decodeBody(w, r, &payload) {
+		return
+	}
+
+	s.indexManager.Heartbeat(payload)
 	w.WriteHeader(http.StatusNoContent)
 }

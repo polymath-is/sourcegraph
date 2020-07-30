@@ -36,6 +36,7 @@ SOURCEGRAPH_LICENSE_GENERATION_KEY=$(cat "$DEV_PRIVATE_PATH"/enterprise/dev/test
 export SOURCEGRAPH_LICENSE_GENERATION_KEY
 
 export PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL=http://localhost:3187
+export PRECISE_CODE_INTEL_INDEXER_URL=http://localhost:3189
 export PRECISE_CODE_INTEL_BUNDLE_DIR=$HOME/.sourcegraph/lsif-storage
 
 export WATCH_ADDITIONAL_GO_DIRS="enterprise/cmd enterprise/dev enterprise/internal"

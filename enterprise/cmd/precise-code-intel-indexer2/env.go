@@ -2,15 +2,16 @@ package main
 
 import (
 	"log"
-	"os"
 	"time"
 
 	"github.com/sourcegraph/sourcegraph/internal/env"
 )
 
 var (
-	rawFrontendURL, _      = os.LookupEnv("SRC_FRONTEND_INTERNAL")
-	rawIndexerPollInterval = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
+	rawFrontendURL              = "localhost:3080"            // TODO - supply
+	rawFrontendURLFromDocker    = "host.docker.internal:3080" // TODO - supply
+	rawIndexerPollInterval      = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
+	rawIndexerHeartbeatInterval = env.Get("PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL", "1s", "Interval between heartbeat requests.")
 )
 
 // mustGet returns the non-empty version of the given raw value fatally logs on failure.

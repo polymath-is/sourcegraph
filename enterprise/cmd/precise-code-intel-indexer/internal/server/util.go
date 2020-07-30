@@ -3,29 +3,20 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/inconshreveable/log15"
 )
 
-func getQuery(r *http.Request, name string) string {
-	return r.URL.Query().Get(name)
-}
-
-func getQueryAsErr(r *http.Request, name string) error {
-	if val := getQuery(r, name); val != "" {
-		return errors.New(val)
+func decodeBody(w http.ResponseWriter, r *http.Request, payload interface{}) bool {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, fmt.Sprintf("failed to unmarshal payload: %s", err.Error()), http.StatusBadRequest)
+		return false
 	}
-	return nil
-}
 
-func getQueryInt(r *http.Request, name string) int {
-	value, _ := strconv.Atoi(r.URL.Query().Get(name))
-	return value
+	return true
 }
 
 // copyAll writes the contents of r to w and logs on write failure.

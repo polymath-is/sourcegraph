@@ -24,8 +24,10 @@ func main() {
 	tracer.Init()
 
 	var (
-		frontendURL         = mustGet(rawFrontendURL, "SRC_FRONTEND_INTERNAL")
-		indexerPollInterval = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
+		frontendURL              = mustGet(rawFrontendURL, "?")
+		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "?")
+		indexerPollInterval      = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
+		indexerHeartbeatInterval = mustParseInterval(rawIndexerHeartbeatInterval, "PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL")
 	)
 
 	observationContext := &observation.Context{
@@ -37,9 +39,11 @@ func main() {
 	server := server.New()
 	indexerMetrics := indexer.NewIndexerMetrics(observationContext)
 	indexer := indexer.NewIndexer(context.Background(), indexer.IndexerOptions{
-		FrontendURL: frontendURL,
-		Interval:    indexerPollInterval,
-		Metrics:     indexerMetrics,
+		FrontendURL:           frontendURL,
+		FrontendURLFromDocker: frontendURLFromDocker,
+		PollInterval:          indexerPollInterval,
+		HeartbeatInterval:     indexerHeartbeatInterval,
+		Metrics:               indexerMetrics,
 	})
 
 	go server.Start()

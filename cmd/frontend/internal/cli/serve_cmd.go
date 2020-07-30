@@ -207,13 +207,13 @@ func Main(enterpriseSetupHook func() enterprise.Services) error {
 	}
 
 	// Create the external HTTP handler.
-	externalHandler, err := newExternalHTTPHandler(schema, enterprise.GithubWebhook, enterprise.BitbucketServerWebhook, enterprise.NewCodeIntelUploadHandler)
+	externalHandler, err := newExternalHTTPHandler(schema, enterprise.GithubWebhook, enterprise.BitbucketServerWebhook, enterprise.NewCodeIntelUploadHandler, enterprise.NewCodeIntelInternalProxyHandler)
 	if err != nil {
 		return err
 	}
 
 	// The internal HTTP handler does not include the auth handlers.
-	internalHandler := newInternalHTTPHandler(schema, enterprise.NewCodeIntelUploadHandler)
+	internalHandler := newInternalHTTPHandler(schema)
 
 	// serve will serve externalHandler on l. It additionally handles graceful restarts.
 	srv := &httpServers{}
