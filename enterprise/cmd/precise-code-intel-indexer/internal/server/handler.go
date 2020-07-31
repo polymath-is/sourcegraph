@@ -6,7 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/inconshreveable/log15"
-	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 )
 
 func (s *Server) handler() http.Handler {
@@ -22,7 +22,7 @@ func (s *Server) handler() http.Handler {
 
 // POST /dequeue
 func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
-	var payload indexmanager.DequeueRequest
+	var payload types.DequeueRequest
 	if !decodeBody(w, r, &payload) {
 		return
 	}
@@ -43,7 +43,7 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 
 // POST /complete
 func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
-	var payload indexmanager.CompleteRequest
+	var payload types.CompleteRequest
 	if !decodeBody(w, r, &payload) {
 		return
 	}
@@ -64,7 +64,7 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 
 // POST /heartbeat
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	var payload indexmanager.HeartbeatRequest
+	var payload types.HeartbeatRequest
 	if !decodeBody(w, r, &payload) {
 		return
 	}
