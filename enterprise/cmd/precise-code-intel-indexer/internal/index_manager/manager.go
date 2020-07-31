@@ -9,47 +9,40 @@ import (
 	"github.com/efritz/glock"
 	"github.com/hashicorp/go-multierror"
 	"github.com/inconshreveable/log15"
-	"github.com/pkg/errors"
-	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	"github.com/teivah/onecontext"
 )
 
-//
-// TODO - collapse these things
-//
-
 // Manager tracks which index records are assigned to which index agents.
 type Manager interface {
-	// Dequeue returns a queued, unlocked index record. This record will be locked in a transaction
-	// until Complete is invoked with the same indexer name and index identifier or the index agent
-	// becomes unresponsive.
-	Dequeue(ctx context.Context, request types.DequeueRequest) (store.Index, bool, error) // TODO - flatten request values
+	// Start runs the routine that handles expiration of transactions for index agents which have
+	// become unresponsive. This method blocks until Stop has been called.
+	Start()
 
-	// Complete marks the target index record as complete or errored depending on the existence of an
-	// error message, then finalizes the transaction that locks that record.
-	Complete(ctx context.Context, request types.CompleteRequest) (bool, error)
+	// Stop will cause Start to exit after the current request. This method blocks until Start has
+	// returned. All active transactions known by the manager will be rolled back. Requests to the
+	// Dequeue, Complete, or Heartbeat methods should not occur after this method has been called.
+	Stop()
+
+	// Stop will cause Start to exit after the current request. This method blocks until Start has
+	// returned. All active transactions known by the manager will be rolled back. Requests to the
+	// Dequeue, Complete, or Heartbeat methods should not occur after this method has been called.
+	Dequeue(ctx context.Context, indexerName string) (store.Index, bool, error)
+
+	// Complete marks the target index record as complete or errored depending on the existence of
+	// an error message, then finalizes the transaction that locks that record.
+	Complete(ctx context.Context, indexerName string, indexID int, errorMessage string) (bool, error)
 
 	// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
-	// records whose identifiers were not supplied in the request.
-	Heartbeat(ctx context.Context, request types.HeartbeatRequest) error
+	// records whose identifiers were not supplied.
+	Heartbeat(ctx context.Context, indexerName string, indexIDs []int) error
 }
 
 // ThreadedManager is a manager that handles requests that modify database transactions from a single
 // goroutine to simplify bookkeeping of live transactions.
 type ThreadedManager interface {
 	Manager
-
-	// Start runs routine that handles dequeue, complete, and heartbeat requests invoked from other
-	// goroutines. This method blocks until Stop has been called.
-	Start()
-
-	// Stop will cause Start to exit after the current request. This is done by canceling the context
-	// passed to the database (which may cause the currently processing unit of work to fail). This
-	// method blocks until Start has returned. All active transactions known by the manager will be
-	// rolled back.
-	Stop()
 }
 
 type ManagerOptions struct {
@@ -77,14 +70,15 @@ type ManagerOptions struct {
 }
 
 type manager struct {
-	store    workerutil.Store
-	options  ManagerOptions
-	clock    glock.Clock
-	indexers map[string]*indexerMeta
-	m        sync.Mutex      // protects indexers
-	ctx      context.Context // root context passed to the database
-	cancel   func()          // cancels the root context
-	finished chan struct{}   // signals that Start has finished
+	store            workerutil.Store
+	options          ManagerOptions
+	clock            glock.Clock
+	indexers         map[string]*indexerMeta
+	dequeueSemaphore chan struct{}   // tracks available dequeue
+	m                sync.Mutex      // protects indexers
+	ctx              context.Context // root context passed to the database
+	cancel           func()          // cancels the root context
+	finished         chan struct{}   // signals that Start has finished
 }
 
 var _ Manager = &manager{}
@@ -112,21 +106,25 @@ func New(store workerutil.Store, options ManagerOptions) ThreadedManager {
 func newManager(store workerutil.Store, options ManagerOptions, clock glock.Clock) ThreadedManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	dequeueSemaphore := make(chan struct{}, options.MaxTransactions)
+	for i := 0; i < options.MaxTransactions; i++ {
+		dequeueSemaphore <- struct{}{}
+	}
+
 	return &manager{
-		store:    store,
-		options:  options,
-		clock:    clock,
-		indexers: map[string]*indexerMeta{},
-		ctx:      ctx,
-		cancel:   cancel,
-		finished: make(chan struct{}),
+		store:            store,
+		options:          options,
+		clock:            clock,
+		dequeueSemaphore: dequeueSemaphore,
+		indexers:         map[string]*indexerMeta{},
+		ctx:              ctx,
+		cancel:           cancel,
+		finished:         make(chan struct{}),
 	}
 }
 
-// Start runs routine that handles dequeue, complete, and heartbeat requests invoked from
-// other goroutines. We handle requests that modify database transactions from a single
-// goroutine to simplify bookkeeping of live transactions. This method blocks until Stop
-// has been called. On exit, all open transactions will be rolled back.
+// Start runs the routine that handles expiration of transactions for index agents which have
+// become unresponsive. This method blocks until Stop has been called.
 func (m *manager) Start() {
 	defer close(m.finished)
 
@@ -147,7 +145,7 @@ loop:
 	for _, indexer := range m.indexers {
 		for _, meta := range indexer.metas {
 			if err := meta.tx.Done(m.ctx.Err()); err != m.ctx.Err() {
-				log15.Error(fmt.Sprintf("failed to close transaction holding index %d", meta.index.ID), "err", err)
+				log15.Error(fmt.Sprintf("Failed to close transaction holding index %d", meta.index.ID), "err", err)
 			}
 		}
 	}
@@ -157,7 +155,7 @@ loop:
 // than the death threshold.
 func (m *manager) cleanup() {
 	if err := m.requeueIndexes(m.ctx, m.pruneIndexers()); err != nil {
-		log15.Error("failed to requeue indexes", "err", err)
+		log15.Error("Failed to requeue indexes", "err", err)
 	}
 }
 
@@ -179,26 +177,34 @@ func (m *manager) pruneIndexers() (metas []indexMeta) {
 	return metas
 }
 
-// Stop will cause Start to exit after the current request. This is done by canceling the context
-// passed to the database (which may cause the currently processing unit of work to fail). This
-// method blocks until Start has returned. All active transactions known by the manager will be
-// rolled back.
+// Stop will cause Start to exit after the current request. This method blocks until Start has
+// returned. All active transactions known by the manager will be rolled back. Requests to the
+// Dequeue, Complete, or Heartbeat methods should not occur after this method has been called.
 func (m *manager) Stop() {
 	m.cancel()
 	<-m.finished
 }
 
-// Dequeue returns a queued, unlocked index record. This record will be locked in a transaction
-// until Complete is invoked with the same indexer name and index identifier or the index agent
-// becomes unresponsive.
-func (m *manager) Dequeue(ctx context.Context, request types.DequeueRequest) (store.Index, bool, error) {
+// Stop will cause Start to exit after the current request. This method blocks until Start has
+// returned. All active transactions known by the manager will be rolled back. Requests to the
+// Dequeue, Complete, or Heartbeat methods should not occur after this method has been called.
+func (m *manager) Dequeue(ctx context.Context, indexerName string) (_ store.Index, dequeued bool, _ error) {
 	ctx, cancel := onecontext.Merge(ctx, m.ctx)
 	defer cancel()
 
-	// TODO - use a semaphore instead
-	if m.countTotalIndexes() > m.options.MaxTransactions {
+	select {
+	case <-m.dequeueSemaphore:
+	default:
 		return store.Index{}, false, nil
 	}
+	defer func() {
+		if !dequeued {
+			// Ensure that if we do not dequeue a record successfully we do not
+			// leak from the semaphore. This will happen if the dequeue call fails
+			// or if there are no records to process
+			m.dequeueSemaphore <- struct{}{}
+		}
+	}()
 
 	record, tx, dequeued, err := m.store.DequeueWithIndependentTransactionContext(ctx, nil)
 	if err != nil {
@@ -210,11 +216,12 @@ func (m *manager) Dequeue(ctx context.Context, request types.DequeueRequest) (st
 
 	now := m.clock.Now()
 	index := record.(store.Index)
-	m.addMeta(request.IndexerName, indexMeta{index: index, tx: tx, started: now})
+	m.addMeta(indexerName, indexMeta{index: index, tx: tx, started: now})
 	return index, true, nil
 }
 
-// TODO - document
+// addMeta removes the given index to the given index agent. This method also updates the last
+// updated time of the index agent.
 func (m *manager) addMeta(indexerName string, meta indexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -230,18 +237,18 @@ func (m *manager) addMeta(indexerName string, meta indexMeta) {
 	indexer.lastUpdate = now
 }
 
-// Complete marks the target index record as complete or errored depending on the existence of an
-// error message, then finalizes the transaction that locks that record.
-func (m *manager) Complete(ctx context.Context, request types.CompleteRequest) (bool, error) {
+// Complete marks the target index record as complete or errored depending on the existence of
+// an error message, then finalizes the transaction that locks that record.
+func (m *manager) Complete(ctx context.Context, indexerName string, indexID int, errorMessage string) (bool, error) {
 	ctx, cancel := onecontext.Merge(ctx, m.ctx)
 	defer cancel()
 
-	index, ok := m.findMeta(request.IndexerName, request.IndexID)
+	index, ok := m.findMeta(indexerName, indexID)
 	if !ok {
 		return false, nil
 	}
 
-	if err := m.completeIndex(ctx, index, request.ErrorMessage); err != nil {
+	if err := m.completeIndex(ctx, index, errorMessage); err != nil {
 		return false, err
 	}
 
@@ -276,6 +283,8 @@ func (m *manager) findMeta(indexerName string, indexID int) (indexMeta, bool) {
 // completeIndex marks the target index record as complete or errored depending on the existence
 // of an error message, then finalizes the transaction that locks that record.
 func (m *manager) completeIndex(ctx context.Context, meta indexMeta, errorMessage string) (err error) {
+	defer func() { m.dequeueSemaphore <- struct{}{} }()
+
 	if errorMessage == "" {
 		_, err = meta.tx.MarkComplete(ctx, meta.index.ID)
 	} else {
@@ -286,9 +295,9 @@ func (m *manager) completeIndex(ctx context.Context, meta indexMeta, errorMessag
 }
 
 // Heartbeat bumps the last updated time of the index agent and closes any transactions locking
-// records whose identifiers were not supplied in the request.
-func (m *manager) Heartbeat(ctx context.Context, request types.HeartbeatRequest) error {
-	return m.requeueIndexes(ctx, m.pruneIndexes(request.IndexerName, request.IndexIDs))
+// records whose identifiers were not supplied.
+func (m *manager) Heartbeat(ctx context.Context, indexerName string, indexIDs []int) error {
+	return m.requeueIndexes(ctx, m.pruneIndexes(indexerName, indexIDs))
 }
 
 // pruneIndexes removes the indexes whose identifier is not in the given list from the given
@@ -330,31 +339,18 @@ func (m *manager) pruneIndexes(indexerName string, ids []int) (dead []indexMeta)
 // requeueIndexes requeues the given index records.
 func (m *manager) requeueIndexes(ctx context.Context, metas []indexMeta) (errs error) {
 	for _, meta := range metas {
-		if err := meta.tx.Requeue(ctx, meta.index.ID, m.clock.Now().Add(m.options.RequeueDelay)); err != nil {
-			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to requeue index %d", meta.index.ID)))
-		}
-
-		if err := meta.tx.Done(nil); err != nil {
-			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to close transaction holding index %d", meta.index.ID)))
+		if err := m.requeueIndex(ctx, meta); err != nil {
+			errs = multierror.Append(errs, err)
 		}
 	}
 
 	return errs
 }
 
-//
-//
-//
+// requeueIndex requeues the given index record , then finalizes the transaction that locks that record.
+func (m *manager) requeueIndex(ctx context.Context, meta indexMeta) error {
+	defer func() { m.dequeueSemaphore <- struct{}{} }()
 
-// TODO - use a semaphore instead
-func (m *manager) countTotalIndexes() int {
-	m.m.Lock()
-	defer m.m.Unlock()
-
-	count := 0
-	for _, indexer := range m.indexers {
-		count += len(indexer.metas)
-	}
-
-	return count
+	err := meta.tx.Requeue(ctx, meta.index.ID, m.clock.Now().Add(m.options.RequeueDelay))
+	return meta.tx.Done(err)
 }

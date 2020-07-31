@@ -5,7 +5,6 @@ package mocks
 import (
 	"context"
 	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
-	types "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 	store "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"sync"
 )
@@ -24,6 +23,12 @@ type MockManager struct {
 	// HeartbeatFunc is an instance of a mock function object controlling
 	// the behavior of the method Heartbeat.
 	HeartbeatFunc *ManagerHeartbeatFunc
+	// StartFunc is an instance of a mock function object controlling the
+	// behavior of the method Start.
+	StartFunc *ManagerStartFunc
+	// StopFunc is an instance of a mock function object controlling the
+	// behavior of the method Stop.
+	StopFunc *ManagerStopFunc
 }
 
 // NewMockManager creates a new mock of the Manager interface. All methods
@@ -31,18 +36,28 @@ type MockManager struct {
 func NewMockManager() *MockManager {
 	return &MockManager{
 		CompleteFunc: &ManagerCompleteFunc{
-			defaultHook: func(context.Context, types.CompleteRequest) (bool, error) {
+			defaultHook: func(context.Context, string, int, string) (bool, error) {
 				return false, nil
 			},
 		},
 		DequeueFunc: &ManagerDequeueFunc{
-			defaultHook: func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
+			defaultHook: func(context.Context, string) (store.Index, bool, error) {
 				return store.Index{}, false, nil
 			},
 		},
 		HeartbeatFunc: &ManagerHeartbeatFunc{
-			defaultHook: func(context.Context, types.HeartbeatRequest) error {
+			defaultHook: func(context.Context, string, []int) error {
 				return nil
+			},
+		},
+		StartFunc: &ManagerStartFunc{
+			defaultHook: func() {
+				return
+			},
+		},
+		StopFunc: &ManagerStopFunc{
+			defaultHook: func() {
+				return
 			},
 		},
 	}
@@ -61,29 +76,35 @@ func NewMockManagerFrom(i indexmanager.Manager) *MockManager {
 		HeartbeatFunc: &ManagerHeartbeatFunc{
 			defaultHook: i.Heartbeat,
 		},
+		StartFunc: &ManagerStartFunc{
+			defaultHook: i.Start,
+		},
+		StopFunc: &ManagerStopFunc{
+			defaultHook: i.Stop,
+		},
 	}
 }
 
 // ManagerCompleteFunc describes the behavior when the Complete method of
 // the parent MockManager instance is invoked.
 type ManagerCompleteFunc struct {
-	defaultHook func(context.Context, types.CompleteRequest) (bool, error)
-	hooks       []func(context.Context, types.CompleteRequest) (bool, error)
+	defaultHook func(context.Context, string, int, string) (bool, error)
+	hooks       []func(context.Context, string, int, string) (bool, error)
 	history     []ManagerCompleteFuncCall
 	mutex       sync.Mutex
 }
 
 // Complete delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockManager) Complete(v0 context.Context, v1 types.CompleteRequest) (bool, error) {
-	r0, r1 := m.CompleteFunc.nextHook()(v0, v1)
-	m.CompleteFunc.appendCall(ManagerCompleteFuncCall{v0, v1, r0, r1})
+func (m *MockManager) Complete(v0 context.Context, v1 string, v2 int, v3 string) (bool, error) {
+	r0, r1 := m.CompleteFunc.nextHook()(v0, v1, v2, v3)
+	m.CompleteFunc.appendCall(ManagerCompleteFuncCall{v0, v1, v2, v3, r0, r1})
 	return r0, r1
 }
 
 // SetDefaultHook sets function that is called when the Complete method of
 // the parent MockManager instance is invoked and the hook queue is empty.
-func (f *ManagerCompleteFunc) SetDefaultHook(hook func(context.Context, types.CompleteRequest) (bool, error)) {
+func (f *ManagerCompleteFunc) SetDefaultHook(hook func(context.Context, string, int, string) (bool, error)) {
 	f.defaultHook = hook
 }
 
@@ -91,7 +112,7 @@ func (f *ManagerCompleteFunc) SetDefaultHook(hook func(context.Context, types.Co
 // Complete method of the parent MockManager instance inovkes the hook at
 // the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
-func (f *ManagerCompleteFunc) PushHook(hook func(context.Context, types.CompleteRequest) (bool, error)) {
+func (f *ManagerCompleteFunc) PushHook(hook func(context.Context, string, int, string) (bool, error)) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -100,7 +121,7 @@ func (f *ManagerCompleteFunc) PushHook(hook func(context.Context, types.Complete
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
 func (f *ManagerCompleteFunc) SetDefaultReturn(r0 bool, r1 error) {
-	f.SetDefaultHook(func(context.Context, types.CompleteRequest) (bool, error) {
+	f.SetDefaultHook(func(context.Context, string, int, string) (bool, error) {
 		return r0, r1
 	})
 }
@@ -108,12 +129,12 @@ func (f *ManagerCompleteFunc) SetDefaultReturn(r0 bool, r1 error) {
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
 func (f *ManagerCompleteFunc) PushReturn(r0 bool, r1 error) {
-	f.PushHook(func(context.Context, types.CompleteRequest) (bool, error) {
+	f.PushHook(func(context.Context, string, int, string) (bool, error) {
 		return r0, r1
 	})
 }
 
-func (f *ManagerCompleteFunc) nextHook() func(context.Context, types.CompleteRequest) (bool, error) {
+func (f *ManagerCompleteFunc) nextHook() func(context.Context, string, int, string) (bool, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -151,7 +172,13 @@ type ManagerCompleteFuncCall struct {
 	Arg0 context.Context
 	// Arg1 is the value of the 2nd argument passed to this method
 	// invocation.
-	Arg1 types.CompleteRequest
+	Arg1 string
+	// Arg2 is the value of the 3rd argument passed to this method
+	// invocation.
+	Arg2 int
+	// Arg3 is the value of the 4th argument passed to this method
+	// invocation.
+	Arg3 string
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
 	Result0 bool
@@ -163,7 +190,7 @@ type ManagerCompleteFuncCall struct {
 // Args returns an interface slice containing the arguments of this
 // invocation.
 func (c ManagerCompleteFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
+	return []interface{}{c.Arg0, c.Arg1, c.Arg2, c.Arg3}
 }
 
 // Results returns an interface slice containing the results of this
@@ -175,15 +202,15 @@ func (c ManagerCompleteFuncCall) Results() []interface{} {
 // ManagerDequeueFunc describes the behavior when the Dequeue method of the
 // parent MockManager instance is invoked.
 type ManagerDequeueFunc struct {
-	defaultHook func(context.Context, types.DequeueRequest) (store.Index, bool, error)
-	hooks       []func(context.Context, types.DequeueRequest) (store.Index, bool, error)
+	defaultHook func(context.Context, string) (store.Index, bool, error)
+	hooks       []func(context.Context, string) (store.Index, bool, error)
 	history     []ManagerDequeueFuncCall
 	mutex       sync.Mutex
 }
 
 // Dequeue delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockManager) Dequeue(v0 context.Context, v1 types.DequeueRequest) (store.Index, bool, error) {
+func (m *MockManager) Dequeue(v0 context.Context, v1 string) (store.Index, bool, error) {
 	r0, r1, r2 := m.DequeueFunc.nextHook()(v0, v1)
 	m.DequeueFunc.appendCall(ManagerDequeueFuncCall{v0, v1, r0, r1, r2})
 	return r0, r1, r2
@@ -191,7 +218,7 @@ func (m *MockManager) Dequeue(v0 context.Context, v1 types.DequeueRequest) (stor
 
 // SetDefaultHook sets function that is called when the Dequeue method of
 // the parent MockManager instance is invoked and the hook queue is empty.
-func (f *ManagerDequeueFunc) SetDefaultHook(hook func(context.Context, types.DequeueRequest) (store.Index, bool, error)) {
+func (f *ManagerDequeueFunc) SetDefaultHook(hook func(context.Context, string) (store.Index, bool, error)) {
 	f.defaultHook = hook
 }
 
@@ -199,7 +226,7 @@ func (f *ManagerDequeueFunc) SetDefaultHook(hook func(context.Context, types.Deq
 // Dequeue method of the parent MockManager instance inovkes the hook at the
 // front of the queue and discards it. After the queue is empty, the default
 // hook function is invoked for any future action.
-func (f *ManagerDequeueFunc) PushHook(hook func(context.Context, types.DequeueRequest) (store.Index, bool, error)) {
+func (f *ManagerDequeueFunc) PushHook(hook func(context.Context, string) (store.Index, bool, error)) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -208,7 +235,7 @@ func (f *ManagerDequeueFunc) PushHook(hook func(context.Context, types.DequeueRe
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
 func (f *ManagerDequeueFunc) SetDefaultReturn(r0 store.Index, r1 bool, r2 error) {
-	f.SetDefaultHook(func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
+	f.SetDefaultHook(func(context.Context, string) (store.Index, bool, error) {
 		return r0, r1, r2
 	})
 }
@@ -216,12 +243,12 @@ func (f *ManagerDequeueFunc) SetDefaultReturn(r0 store.Index, r1 bool, r2 error)
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
 func (f *ManagerDequeueFunc) PushReturn(r0 store.Index, r1 bool, r2 error) {
-	f.PushHook(func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
+	f.PushHook(func(context.Context, string) (store.Index, bool, error) {
 		return r0, r1, r2
 	})
 }
 
-func (f *ManagerDequeueFunc) nextHook() func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
+func (f *ManagerDequeueFunc) nextHook() func(context.Context, string) (store.Index, bool, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -259,7 +286,7 @@ type ManagerDequeueFuncCall struct {
 	Arg0 context.Context
 	// Arg1 is the value of the 2nd argument passed to this method
 	// invocation.
-	Arg1 types.DequeueRequest
+	Arg1 string
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
 	Result0 store.Index
@@ -286,23 +313,23 @@ func (c ManagerDequeueFuncCall) Results() []interface{} {
 // ManagerHeartbeatFunc describes the behavior when the Heartbeat method of
 // the parent MockManager instance is invoked.
 type ManagerHeartbeatFunc struct {
-	defaultHook func(context.Context, types.HeartbeatRequest) error
-	hooks       []func(context.Context, types.HeartbeatRequest) error
+	defaultHook func(context.Context, string, []int) error
+	hooks       []func(context.Context, string, []int) error
 	history     []ManagerHeartbeatFuncCall
 	mutex       sync.Mutex
 }
 
 // Heartbeat delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockManager) Heartbeat(v0 context.Context, v1 types.HeartbeatRequest) error {
-	r0 := m.HeartbeatFunc.nextHook()(v0, v1)
-	m.HeartbeatFunc.appendCall(ManagerHeartbeatFuncCall{v0, v1, r0})
+func (m *MockManager) Heartbeat(v0 context.Context, v1 string, v2 []int) error {
+	r0 := m.HeartbeatFunc.nextHook()(v0, v1, v2)
+	m.HeartbeatFunc.appendCall(ManagerHeartbeatFuncCall{v0, v1, v2, r0})
 	return r0
 }
 
 // SetDefaultHook sets function that is called when the Heartbeat method of
 // the parent MockManager instance is invoked and the hook queue is empty.
-func (f *ManagerHeartbeatFunc) SetDefaultHook(hook func(context.Context, types.HeartbeatRequest) error) {
+func (f *ManagerHeartbeatFunc) SetDefaultHook(hook func(context.Context, string, []int) error) {
 	f.defaultHook = hook
 }
 
@@ -310,7 +337,7 @@ func (f *ManagerHeartbeatFunc) SetDefaultHook(hook func(context.Context, types.H
 // Heartbeat method of the parent MockManager instance inovkes the hook at
 // the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
-func (f *ManagerHeartbeatFunc) PushHook(hook func(context.Context, types.HeartbeatRequest) error) {
+func (f *ManagerHeartbeatFunc) PushHook(hook func(context.Context, string, []int) error) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -319,7 +346,7 @@ func (f *ManagerHeartbeatFunc) PushHook(hook func(context.Context, types.Heartbe
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
 func (f *ManagerHeartbeatFunc) SetDefaultReturn(r0 error) {
-	f.SetDefaultHook(func(context.Context, types.HeartbeatRequest) error {
+	f.SetDefaultHook(func(context.Context, string, []int) error {
 		return r0
 	})
 }
@@ -327,12 +354,12 @@ func (f *ManagerHeartbeatFunc) SetDefaultReturn(r0 error) {
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
 func (f *ManagerHeartbeatFunc) PushReturn(r0 error) {
-	f.PushHook(func(context.Context, types.HeartbeatRequest) error {
+	f.PushHook(func(context.Context, string, []int) error {
 		return r0
 	})
 }
 
-func (f *ManagerHeartbeatFunc) nextHook() func(context.Context, types.HeartbeatRequest) error {
+func (f *ManagerHeartbeatFunc) nextHook() func(context.Context, string, []int) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -370,7 +397,10 @@ type ManagerHeartbeatFuncCall struct {
 	Arg0 context.Context
 	// Arg1 is the value of the 2nd argument passed to this method
 	// invocation.
-	Arg1 types.HeartbeatRequest
+	Arg1 string
+	// Arg2 is the value of the 3rd argument passed to this method
+	// invocation.
+	Arg2 []int
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
 	Result0 error
@@ -379,7 +409,7 @@ type ManagerHeartbeatFuncCall struct {
 // Args returns an interface slice containing the arguments of this
 // invocation.
 func (c ManagerHeartbeatFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
+	return []interface{}{c.Arg0, c.Arg1, c.Arg2}
 }
 
 // Results returns an interface slice containing the results of this
@@ -388,440 +418,34 @@ func (c ManagerHeartbeatFuncCall) Results() []interface{} {
 	return []interface{}{c.Result0}
 }
 
-// MockThreadedManager is a mock implementation of the ThreadedManager
-// interface (from the package
-// github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager)
-// used for unit testing.
-type MockThreadedManager struct {
-	// CompleteFunc is an instance of a mock function object controlling the
-	// behavior of the method Complete.
-	CompleteFunc *ThreadedManagerCompleteFunc
-	// DequeueFunc is an instance of a mock function object controlling the
-	// behavior of the method Dequeue.
-	DequeueFunc *ThreadedManagerDequeueFunc
-	// HeartbeatFunc is an instance of a mock function object controlling
-	// the behavior of the method Heartbeat.
-	HeartbeatFunc *ThreadedManagerHeartbeatFunc
-	// StartFunc is an instance of a mock function object controlling the
-	// behavior of the method Start.
-	StartFunc *ThreadedManagerStartFunc
-	// StopFunc is an instance of a mock function object controlling the
-	// behavior of the method Stop.
-	StopFunc *ThreadedManagerStopFunc
-}
-
-// NewMockThreadedManager creates a new mock of the ThreadedManager
-// interface. All methods return zero values for all results, unless
-// overwritten.
-func NewMockThreadedManager() *MockThreadedManager {
-	return &MockThreadedManager{
-		CompleteFunc: &ThreadedManagerCompleteFunc{
-			defaultHook: func(context.Context, types.CompleteRequest) (bool, error) {
-				return false, nil
-			},
-		},
-		DequeueFunc: &ThreadedManagerDequeueFunc{
-			defaultHook: func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
-				return store.Index{}, false, nil
-			},
-		},
-		HeartbeatFunc: &ThreadedManagerHeartbeatFunc{
-			defaultHook: func(context.Context, types.HeartbeatRequest) error {
-				return nil
-			},
-		},
-		StartFunc: &ThreadedManagerStartFunc{
-			defaultHook: func() {
-				return
-			},
-		},
-		StopFunc: &ThreadedManagerStopFunc{
-			defaultHook: func() {
-				return
-			},
-		},
-	}
-}
-
-// NewMockThreadedManagerFrom creates a new mock of the MockThreadedManager
-// interface. All methods delegate to the given implementation, unless
-// overwritten.
-func NewMockThreadedManagerFrom(i indexmanager.ThreadedManager) *MockThreadedManager {
-	return &MockThreadedManager{
-		CompleteFunc: &ThreadedManagerCompleteFunc{
-			defaultHook: i.Complete,
-		},
-		DequeueFunc: &ThreadedManagerDequeueFunc{
-			defaultHook: i.Dequeue,
-		},
-		HeartbeatFunc: &ThreadedManagerHeartbeatFunc{
-			defaultHook: i.Heartbeat,
-		},
-		StartFunc: &ThreadedManagerStartFunc{
-			defaultHook: i.Start,
-		},
-		StopFunc: &ThreadedManagerStopFunc{
-			defaultHook: i.Stop,
-		},
-	}
-}
-
-// ThreadedManagerCompleteFunc describes the behavior when the Complete
-// method of the parent MockThreadedManager instance is invoked.
-type ThreadedManagerCompleteFunc struct {
-	defaultHook func(context.Context, types.CompleteRequest) (bool, error)
-	hooks       []func(context.Context, types.CompleteRequest) (bool, error)
-	history     []ThreadedManagerCompleteFuncCall
-	mutex       sync.Mutex
-}
-
-// Complete delegates to the next hook function in the queue and stores the
-// parameter and result values of this invocation.
-func (m *MockThreadedManager) Complete(v0 context.Context, v1 types.CompleteRequest) (bool, error) {
-	r0, r1 := m.CompleteFunc.nextHook()(v0, v1)
-	m.CompleteFunc.appendCall(ThreadedManagerCompleteFuncCall{v0, v1, r0, r1})
-	return r0, r1
-}
-
-// SetDefaultHook sets function that is called when the Complete method of
-// the parent MockThreadedManager instance is invoked and the hook queue is
-// empty.
-func (f *ThreadedManagerCompleteFunc) SetDefaultHook(hook func(context.Context, types.CompleteRequest) (bool, error)) {
-	f.defaultHook = hook
-}
-
-// PushHook adds a function to the end of hook queue. Each invocation of the
-// Complete method of the parent MockThreadedManager instance inovkes the
-// hook at the front of the queue and discards it. After the queue is empty,
-// the default hook function is invoked for any future action.
-func (f *ThreadedManagerCompleteFunc) PushHook(hook func(context.Context, types.CompleteRequest) (bool, error)) {
-	f.mutex.Lock()
-	f.hooks = append(f.hooks, hook)
-	f.mutex.Unlock()
-}
-
-// SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
-// the given values.
-func (f *ThreadedManagerCompleteFunc) SetDefaultReturn(r0 bool, r1 error) {
-	f.SetDefaultHook(func(context.Context, types.CompleteRequest) (bool, error) {
-		return r0, r1
-	})
-}
-
-// PushReturn calls PushDefaultHook with a function that returns the given
-// values.
-func (f *ThreadedManagerCompleteFunc) PushReturn(r0 bool, r1 error) {
-	f.PushHook(func(context.Context, types.CompleteRequest) (bool, error) {
-		return r0, r1
-	})
-}
-
-func (f *ThreadedManagerCompleteFunc) nextHook() func(context.Context, types.CompleteRequest) (bool, error) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-
-	if len(f.hooks) == 0 {
-		return f.defaultHook
-	}
-
-	hook := f.hooks[0]
-	f.hooks = f.hooks[1:]
-	return hook
-}
-
-func (f *ThreadedManagerCompleteFunc) appendCall(r0 ThreadedManagerCompleteFuncCall) {
-	f.mutex.Lock()
-	f.history = append(f.history, r0)
-	f.mutex.Unlock()
-}
-
-// History returns a sequence of ThreadedManagerCompleteFuncCall objects
-// describing the invocations of this function.
-func (f *ThreadedManagerCompleteFunc) History() []ThreadedManagerCompleteFuncCall {
-	f.mutex.Lock()
-	history := make([]ThreadedManagerCompleteFuncCall, len(f.history))
-	copy(history, f.history)
-	f.mutex.Unlock()
-
-	return history
-}
-
-// ThreadedManagerCompleteFuncCall is an object that describes an invocation
-// of method Complete on an instance of MockThreadedManager.
-type ThreadedManagerCompleteFuncCall struct {
-	// Arg0 is the value of the 1st argument passed to this method
-	// invocation.
-	Arg0 context.Context
-	// Arg1 is the value of the 2nd argument passed to this method
-	// invocation.
-	Arg1 types.CompleteRequest
-	// Result0 is the value of the 1st result returned from this method
-	// invocation.
-	Result0 bool
-	// Result1 is the value of the 2nd result returned from this method
-	// invocation.
-	Result1 error
-}
-
-// Args returns an interface slice containing the arguments of this
-// invocation.
-func (c ThreadedManagerCompleteFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
-}
-
-// Results returns an interface slice containing the results of this
-// invocation.
-func (c ThreadedManagerCompleteFuncCall) Results() []interface{} {
-	return []interface{}{c.Result0, c.Result1}
-}
-
-// ThreadedManagerDequeueFunc describes the behavior when the Dequeue method
-// of the parent MockThreadedManager instance is invoked.
-type ThreadedManagerDequeueFunc struct {
-	defaultHook func(context.Context, types.DequeueRequest) (store.Index, bool, error)
-	hooks       []func(context.Context, types.DequeueRequest) (store.Index, bool, error)
-	history     []ThreadedManagerDequeueFuncCall
-	mutex       sync.Mutex
-}
-
-// Dequeue delegates to the next hook function in the queue and stores the
-// parameter and result values of this invocation.
-func (m *MockThreadedManager) Dequeue(v0 context.Context, v1 types.DequeueRequest) (store.Index, bool, error) {
-	r0, r1, r2 := m.DequeueFunc.nextHook()(v0, v1)
-	m.DequeueFunc.appendCall(ThreadedManagerDequeueFuncCall{v0, v1, r0, r1, r2})
-	return r0, r1, r2
-}
-
-// SetDefaultHook sets function that is called when the Dequeue method of
-// the parent MockThreadedManager instance is invoked and the hook queue is
-// empty.
-func (f *ThreadedManagerDequeueFunc) SetDefaultHook(hook func(context.Context, types.DequeueRequest) (store.Index, bool, error)) {
-	f.defaultHook = hook
-}
-
-// PushHook adds a function to the end of hook queue. Each invocation of the
-// Dequeue method of the parent MockThreadedManager instance inovkes the
-// hook at the front of the queue and discards it. After the queue is empty,
-// the default hook function is invoked for any future action.
-func (f *ThreadedManagerDequeueFunc) PushHook(hook func(context.Context, types.DequeueRequest) (store.Index, bool, error)) {
-	f.mutex.Lock()
-	f.hooks = append(f.hooks, hook)
-	f.mutex.Unlock()
-}
-
-// SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
-// the given values.
-func (f *ThreadedManagerDequeueFunc) SetDefaultReturn(r0 store.Index, r1 bool, r2 error) {
-	f.SetDefaultHook(func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
-		return r0, r1, r2
-	})
-}
-
-// PushReturn calls PushDefaultHook with a function that returns the given
-// values.
-func (f *ThreadedManagerDequeueFunc) PushReturn(r0 store.Index, r1 bool, r2 error) {
-	f.PushHook(func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
-		return r0, r1, r2
-	})
-}
-
-func (f *ThreadedManagerDequeueFunc) nextHook() func(context.Context, types.DequeueRequest) (store.Index, bool, error) {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-
-	if len(f.hooks) == 0 {
-		return f.defaultHook
-	}
-
-	hook := f.hooks[0]
-	f.hooks = f.hooks[1:]
-	return hook
-}
-
-func (f *ThreadedManagerDequeueFunc) appendCall(r0 ThreadedManagerDequeueFuncCall) {
-	f.mutex.Lock()
-	f.history = append(f.history, r0)
-	f.mutex.Unlock()
-}
-
-// History returns a sequence of ThreadedManagerDequeueFuncCall objects
-// describing the invocations of this function.
-func (f *ThreadedManagerDequeueFunc) History() []ThreadedManagerDequeueFuncCall {
-	f.mutex.Lock()
-	history := make([]ThreadedManagerDequeueFuncCall, len(f.history))
-	copy(history, f.history)
-	f.mutex.Unlock()
-
-	return history
-}
-
-// ThreadedManagerDequeueFuncCall is an object that describes an invocation
-// of method Dequeue on an instance of MockThreadedManager.
-type ThreadedManagerDequeueFuncCall struct {
-	// Arg0 is the value of the 1st argument passed to this method
-	// invocation.
-	Arg0 context.Context
-	// Arg1 is the value of the 2nd argument passed to this method
-	// invocation.
-	Arg1 types.DequeueRequest
-	// Result0 is the value of the 1st result returned from this method
-	// invocation.
-	Result0 store.Index
-	// Result1 is the value of the 2nd result returned from this method
-	// invocation.
-	Result1 bool
-	// Result2 is the value of the 3rd result returned from this method
-	// invocation.
-	Result2 error
-}
-
-// Args returns an interface slice containing the arguments of this
-// invocation.
-func (c ThreadedManagerDequeueFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
-}
-
-// Results returns an interface slice containing the results of this
-// invocation.
-func (c ThreadedManagerDequeueFuncCall) Results() []interface{} {
-	return []interface{}{c.Result0, c.Result1, c.Result2}
-}
-
-// ThreadedManagerHeartbeatFunc describes the behavior when the Heartbeat
-// method of the parent MockThreadedManager instance is invoked.
-type ThreadedManagerHeartbeatFunc struct {
-	defaultHook func(context.Context, types.HeartbeatRequest) error
-	hooks       []func(context.Context, types.HeartbeatRequest) error
-	history     []ThreadedManagerHeartbeatFuncCall
-	mutex       sync.Mutex
-}
-
-// Heartbeat delegates to the next hook function in the queue and stores the
-// parameter and result values of this invocation.
-func (m *MockThreadedManager) Heartbeat(v0 context.Context, v1 types.HeartbeatRequest) error {
-	r0 := m.HeartbeatFunc.nextHook()(v0, v1)
-	m.HeartbeatFunc.appendCall(ThreadedManagerHeartbeatFuncCall{v0, v1, r0})
-	return r0
-}
-
-// SetDefaultHook sets function that is called when the Heartbeat method of
-// the parent MockThreadedManager instance is invoked and the hook queue is
-// empty.
-func (f *ThreadedManagerHeartbeatFunc) SetDefaultHook(hook func(context.Context, types.HeartbeatRequest) error) {
-	f.defaultHook = hook
-}
-
-// PushHook adds a function to the end of hook queue. Each invocation of the
-// Heartbeat method of the parent MockThreadedManager instance inovkes the
-// hook at the front of the queue and discards it. After the queue is empty,
-// the default hook function is invoked for any future action.
-func (f *ThreadedManagerHeartbeatFunc) PushHook(hook func(context.Context, types.HeartbeatRequest) error) {
-	f.mutex.Lock()
-	f.hooks = append(f.hooks, hook)
-	f.mutex.Unlock()
-}
-
-// SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
-// the given values.
-func (f *ThreadedManagerHeartbeatFunc) SetDefaultReturn(r0 error) {
-	f.SetDefaultHook(func(context.Context, types.HeartbeatRequest) error {
-		return r0
-	})
-}
-
-// PushReturn calls PushDefaultHook with a function that returns the given
-// values.
-func (f *ThreadedManagerHeartbeatFunc) PushReturn(r0 error) {
-	f.PushHook(func(context.Context, types.HeartbeatRequest) error {
-		return r0
-	})
-}
-
-func (f *ThreadedManagerHeartbeatFunc) nextHook() func(context.Context, types.HeartbeatRequest) error {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-
-	if len(f.hooks) == 0 {
-		return f.defaultHook
-	}
-
-	hook := f.hooks[0]
-	f.hooks = f.hooks[1:]
-	return hook
-}
-
-func (f *ThreadedManagerHeartbeatFunc) appendCall(r0 ThreadedManagerHeartbeatFuncCall) {
-	f.mutex.Lock()
-	f.history = append(f.history, r0)
-	f.mutex.Unlock()
-}
-
-// History returns a sequence of ThreadedManagerHeartbeatFuncCall objects
-// describing the invocations of this function.
-func (f *ThreadedManagerHeartbeatFunc) History() []ThreadedManagerHeartbeatFuncCall {
-	f.mutex.Lock()
-	history := make([]ThreadedManagerHeartbeatFuncCall, len(f.history))
-	copy(history, f.history)
-	f.mutex.Unlock()
-
-	return history
-}
-
-// ThreadedManagerHeartbeatFuncCall is an object that describes an
-// invocation of method Heartbeat on an instance of MockThreadedManager.
-type ThreadedManagerHeartbeatFuncCall struct {
-	// Arg0 is the value of the 1st argument passed to this method
-	// invocation.
-	Arg0 context.Context
-	// Arg1 is the value of the 2nd argument passed to this method
-	// invocation.
-	Arg1 types.HeartbeatRequest
-	// Result0 is the value of the 1st result returned from this method
-	// invocation.
-	Result0 error
-}
-
-// Args returns an interface slice containing the arguments of this
-// invocation.
-func (c ThreadedManagerHeartbeatFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0, c.Arg1}
-}
-
-// Results returns an interface slice containing the results of this
-// invocation.
-func (c ThreadedManagerHeartbeatFuncCall) Results() []interface{} {
-	return []interface{}{c.Result0}
-}
-
-// ThreadedManagerStartFunc describes the behavior when the Start method of
-// the parent MockThreadedManager instance is invoked.
-type ThreadedManagerStartFunc struct {
+// ManagerStartFunc describes the behavior when the Start method of the
+// parent MockManager instance is invoked.
+type ManagerStartFunc struct {
 	defaultHook func()
 	hooks       []func()
-	history     []ThreadedManagerStartFuncCall
+	history     []ManagerStartFuncCall
 	mutex       sync.Mutex
 }
 
 // Start delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockThreadedManager) Start() {
+func (m *MockManager) Start() {
 	m.StartFunc.nextHook()()
-	m.StartFunc.appendCall(ThreadedManagerStartFuncCall{})
+	m.StartFunc.appendCall(ManagerStartFuncCall{})
 	return
 }
 
 // SetDefaultHook sets function that is called when the Start method of the
-// parent MockThreadedManager instance is invoked and the hook queue is
-// empty.
-func (f *ThreadedManagerStartFunc) SetDefaultHook(hook func()) {
+// parent MockManager instance is invoked and the hook queue is empty.
+func (f *ManagerStartFunc) SetDefaultHook(hook func()) {
 	f.defaultHook = hook
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// Start method of the parent MockThreadedManager instance inovkes the hook
-// at the front of the queue and discards it. After the queue is empty, the
-// default hook function is invoked for any future action.
-func (f *ThreadedManagerStartFunc) PushHook(hook func()) {
+// Start method of the parent MockManager instance inovkes the hook at the
+// front of the queue and discards it. After the queue is empty, the default
+// hook function is invoked for any future action.
+func (f *ManagerStartFunc) PushHook(hook func()) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -829,7 +453,7 @@ func (f *ThreadedManagerStartFunc) PushHook(hook func()) {
 
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
-func (f *ThreadedManagerStartFunc) SetDefaultReturn() {
+func (f *ManagerStartFunc) SetDefaultReturn() {
 	f.SetDefaultHook(func() {
 		return
 	})
@@ -837,13 +461,13 @@ func (f *ThreadedManagerStartFunc) SetDefaultReturn() {
 
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
-func (f *ThreadedManagerStartFunc) PushReturn() {
+func (f *ManagerStartFunc) PushReturn() {
 	f.PushHook(func() {
 		return
 	})
 }
 
-func (f *ThreadedManagerStartFunc) nextHook() func() {
+func (f *ManagerStartFunc) nextHook() func() {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -856,68 +480,67 @@ func (f *ThreadedManagerStartFunc) nextHook() func() {
 	return hook
 }
 
-func (f *ThreadedManagerStartFunc) appendCall(r0 ThreadedManagerStartFuncCall) {
+func (f *ManagerStartFunc) appendCall(r0 ManagerStartFuncCall) {
 	f.mutex.Lock()
 	f.history = append(f.history, r0)
 	f.mutex.Unlock()
 }
 
-// History returns a sequence of ThreadedManagerStartFuncCall objects
-// describing the invocations of this function.
-func (f *ThreadedManagerStartFunc) History() []ThreadedManagerStartFuncCall {
+// History returns a sequence of ManagerStartFuncCall objects describing the
+// invocations of this function.
+func (f *ManagerStartFunc) History() []ManagerStartFuncCall {
 	f.mutex.Lock()
-	history := make([]ThreadedManagerStartFuncCall, len(f.history))
+	history := make([]ManagerStartFuncCall, len(f.history))
 	copy(history, f.history)
 	f.mutex.Unlock()
 
 	return history
 }
 
-// ThreadedManagerStartFuncCall is an object that describes an invocation of
-// method Start on an instance of MockThreadedManager.
-type ThreadedManagerStartFuncCall struct{}
+// ManagerStartFuncCall is an object that describes an invocation of method
+// Start on an instance of MockManager.
+type ManagerStartFuncCall struct{}
 
 // Args returns an interface slice containing the arguments of this
 // invocation.
-func (c ThreadedManagerStartFuncCall) Args() []interface{} {
+func (c ManagerStartFuncCall) Args() []interface{} {
 	return []interface{}{}
 }
 
 // Results returns an interface slice containing the results of this
 // invocation.
-func (c ThreadedManagerStartFuncCall) Results() []interface{} {
+func (c ManagerStartFuncCall) Results() []interface{} {
 	return []interface{}{}
 }
 
-// ThreadedManagerStopFunc describes the behavior when the Stop method of
-// the parent MockThreadedManager instance is invoked.
-type ThreadedManagerStopFunc struct {
+// ManagerStopFunc describes the behavior when the Stop method of the parent
+// MockManager instance is invoked.
+type ManagerStopFunc struct {
 	defaultHook func()
 	hooks       []func()
-	history     []ThreadedManagerStopFuncCall
+	history     []ManagerStopFuncCall
 	mutex       sync.Mutex
 }
 
 // Stop delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockThreadedManager) Stop() {
+func (m *MockManager) Stop() {
 	m.StopFunc.nextHook()()
-	m.StopFunc.appendCall(ThreadedManagerStopFuncCall{})
+	m.StopFunc.appendCall(ManagerStopFuncCall{})
 	return
 }
 
 // SetDefaultHook sets function that is called when the Stop method of the
-// parent MockThreadedManager instance is invoked and the hook queue is
-// empty.
-func (f *ThreadedManagerStopFunc) SetDefaultHook(hook func()) {
+// parent MockManager instance is invoked and the hook queue is empty.
+func (f *ManagerStopFunc) SetDefaultHook(hook func()) {
 	f.defaultHook = hook
 }
 
 // PushHook adds a function to the end of hook queue. Each invocation of the
-// Stop method of the parent MockThreadedManager instance inovkes the hook
-// at the front of the queue and discards it. After the queue is empty, the
-// default hook function is invoked for any future action.
-func (f *ThreadedManagerStopFunc) PushHook(hook func()) {
+// Stop method of the parent MockManager instance inovkes the hook at the
+// front of the queue and discards it. After the queue is empty, the default
+// hook function is invoked for any future action.
+func (f *ManagerStopFunc) PushHook(hook func()) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -925,7 +548,7 @@ func (f *ThreadedManagerStopFunc) PushHook(hook func()) {
 
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
-func (f *ThreadedManagerStopFunc) SetDefaultReturn() {
+func (f *ManagerStopFunc) SetDefaultReturn() {
 	f.SetDefaultHook(func() {
 		return
 	})
@@ -933,13 +556,13 @@ func (f *ThreadedManagerStopFunc) SetDefaultReturn() {
 
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
-func (f *ThreadedManagerStopFunc) PushReturn() {
+func (f *ManagerStopFunc) PushReturn() {
 	f.PushHook(func() {
 		return
 	})
 }
 
-func (f *ThreadedManagerStopFunc) nextHook() func() {
+func (f *ManagerStopFunc) nextHook() func() {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -952,35 +575,35 @@ func (f *ThreadedManagerStopFunc) nextHook() func() {
 	return hook
 }
 
-func (f *ThreadedManagerStopFunc) appendCall(r0 ThreadedManagerStopFuncCall) {
+func (f *ManagerStopFunc) appendCall(r0 ManagerStopFuncCall) {
 	f.mutex.Lock()
 	f.history = append(f.history, r0)
 	f.mutex.Unlock()
 }
 
-// History returns a sequence of ThreadedManagerStopFuncCall objects
-// describing the invocations of this function.
-func (f *ThreadedManagerStopFunc) History() []ThreadedManagerStopFuncCall {
+// History returns a sequence of ManagerStopFuncCall objects describing the
+// invocations of this function.
+func (f *ManagerStopFunc) History() []ManagerStopFuncCall {
 	f.mutex.Lock()
-	history := make([]ThreadedManagerStopFuncCall, len(f.history))
+	history := make([]ManagerStopFuncCall, len(f.history))
 	copy(history, f.history)
 	f.mutex.Unlock()
 
 	return history
 }
 
-// ThreadedManagerStopFuncCall is an object that describes an invocation of
-// method Stop on an instance of MockThreadedManager.
-type ThreadedManagerStopFuncCall struct{}
+// ManagerStopFuncCall is an object that describes an invocation of method
+// Stop on an instance of MockManager.
+type ManagerStopFuncCall struct{}
 
 // Args returns an interface slice containing the arguments of this
 // invocation.
-func (c ThreadedManagerStopFuncCall) Args() []interface{} {
+func (c ManagerStopFuncCall) Args() []interface{} {
 	return []interface{}{}
 }
 
 // Results returns an interface slice containing the results of this
 // invocation.
-func (c ThreadedManagerStopFuncCall) Results() []interface{} {
+func (c ManagerStopFuncCall) Results() []interface{} {
 	return []interface{}{}
 }

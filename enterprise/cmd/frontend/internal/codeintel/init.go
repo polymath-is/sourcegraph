@@ -25,18 +25,12 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 )
 
-var bundleManagerURL = env.Get("PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL", "", "HTTP address for the internal LSIF bundle manager server.")
+var bundleManagerURL = env.Get("PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL", "", "HTTP address for internal LSIF bundle manager server.")
 var rawHunkCacheSize = env.Get("PRECISE_CODE_INTEL_HUNK_CACHE_CAPACITY", "1000", "Maximum number of git diff hunk objects that can be loaded into the hunk cache at once.")
-var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEXER_URL", "", "HTTP address for the internal LSIF indexer server.")
-var internalProxyAuthToken = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied by the cluster-external precise code intel services.")
 
 func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 	if bundleManagerURL == "" {
 		return fmt.Errorf("invalid value for PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL: no value supplied")
-	}
-
-	if indexerURL == "" {
-		return fmt.Errorf("invalid value for PRECISE_CODE_INTEL_INDEXER_URL: no value supplied")
 	}
 
 	hunkCacheSize, err := strconv.ParseInt(rawHunkCacheSize, 10, 64)
