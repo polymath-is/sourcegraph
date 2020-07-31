@@ -3,6 +3,7 @@ package indexer
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os/exec"
 	"sync"
@@ -74,6 +75,6 @@ func processStream(prefix string, r io.Reader) {
 	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
-		log15.Info("%s: %s\n", prefix, scanner.Text())
+		log15.Info(fmt.Sprintf("%s: %s\n", prefix, scanner.Text()))
 	}
 }

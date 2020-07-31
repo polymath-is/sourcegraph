@@ -10,25 +10,30 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/queue/types"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	"github.com/teivah/onecontext"
 )
+
+//
+// TODO - collapse these things
+//
 
 // Manager tracks which index records are assigned to which index agents.
 type Manager interface {
 	// Dequeue returns a queued, unlocked index record. This record will be locked in a transaction
 	// until Complete is invoked with the same indexer name and index identifier or the index agent
 	// becomes unresponsive.
-	Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error)
+	Dequeue(ctx context.Context, request types.DequeueRequest) (store.Index, bool, error) // TODO - flatten request values
 
 	// Complete marks the target index record as complete or errored depending on the existence of an
 	// error message, then finalizes the transaction that locks that record.
-	Complete(ctx context.Context, request CompleteRequest) (bool, error)
+	Complete(ctx context.Context, request types.CompleteRequest) (bool, error)
 
 	// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
 	// records whose identifiers were not supplied in the request.
-	Heartbeat(ctx context.Context, request HeartbeatRequest) error
+	Heartbeat(ctx context.Context, request types.HeartbeatRequest) error
 }
 
 // ThreadedManager is a manager that handles requests that modify database transactions from a single
@@ -75,7 +80,6 @@ type manager struct {
 	store    workerutil.Store
 	options  ManagerOptions
 	clock    glock.Clock
-	requests chan interface{}
 	indexers map[string]*indexerMeta
 	m        sync.Mutex      // protects indexers
 	ctx      context.Context // root context passed to the database
@@ -92,6 +96,14 @@ type indexerMeta struct {
 	metas      []indexMeta
 }
 
+// indexMeta wraps an index record and the tranaction that is currently locking
+// it for processing.
+type indexMeta struct {
+	index   store.Index
+	tx      workerutil.Store
+	started time.Time
+}
+
 // New creates a new manager with the given store and options.
 func New(store workerutil.Store, options ManagerOptions) ThreadedManager {
 	return newManager(store, options, glock.NewRealClock())
@@ -104,7 +116,6 @@ func newManager(store workerutil.Store, options ManagerOptions, clock glock.Cloc
 		store:    store,
 		options:  options,
 		clock:    clock,
-		requests: make(chan interface{}),
 		indexers: map[string]*indexerMeta{},
 		ctx:      ctx,
 		cancel:   cancel,
@@ -117,18 +128,14 @@ func newManager(store workerutil.Store, options ManagerOptions, clock glock.Cloc
 // goroutine to simplify bookkeeping of live transactions. This method blocks until Stop
 // has been called. On exit, all open transactions will be rolled back.
 func (m *manager) Start() {
-	defer close(m.requests)
 	defer close(m.finished)
 
 loop:
 	for {
+		m.cleanup()
+
 		select {
-		case req := <-m.requests:
-			m.handle(req)
-
 		case <-m.clock.After(m.options.CleanupInterval):
-			m.cleanup()
-
 		case <-m.ctx.Done():
 			break loop
 		}
@@ -146,6 +153,32 @@ loop:
 	}
 }
 
+// cleanup requeues every locked index record assigned to agents which have not been updated for longer
+// than the death threshold.
+func (m *manager) cleanup() {
+	if err := m.requeueIndexes(m.ctx, m.pruneIndexers()); err != nil {
+		log15.Error("failed to requeue indexes", "err", err)
+	}
+}
+
+// pruneIndexers removes the data associated with index agents which have not been updated for longer
+// than the death threshold and returns all index meta values assigned to removed index agents.
+func (m *manager) pruneIndexers() (metas []indexMeta) {
+	m.m.Lock()
+	defer m.m.Unlock()
+
+	for name, indexer := range m.indexers {
+		if m.clock.Now().Sub(indexer.lastUpdate) <= m.options.DeathThreshold {
+			continue
+		}
+
+		metas = append(metas, indexer.metas...)
+		delete(m.indexers, name)
+	}
+
+	return metas
+}
+
 // Stop will cause Start to exit after the current request. This is done by canceling the context
 // passed to the database (which may cause the currently processing unit of work to fail). This
 // method blocks until Start has returned. All active transactions known by the manager will be
@@ -158,184 +191,61 @@ func (m *manager) Stop() {
 // Dequeue returns a queued, unlocked index record. This record will be locked in a transaction
 // until Complete is invoked with the same indexer name and index identifier or the index agent
 // becomes unresponsive.
-func (m *manager) Dequeue(ctx context.Context, request DequeueRequest) (store.Index, bool, error) {
-	envelope := newDequeueRequestEnvelope(ctx, request)
+func (m *manager) Dequeue(ctx context.Context, request types.DequeueRequest) (store.Index, bool, error) {
+	ctx, cancel := onecontext.Merge(ctx, m.ctx)
+	defer cancel()
 
-	select {
-	case m.requests <- envelope:
-	case <-ctx.Done():
-		return store.Index{}, false, ctx.Err()
+	// TODO - use a semaphore instead
+	if m.countTotalIndexes() > m.options.MaxTransactions {
+		return store.Index{}, false, nil
 	}
 
-	select {
-	case response := <-envelope.response:
-		if response.err != nil || !response.dequeued {
-			return store.Index{}, false, response.err
-		}
-
-		return response.meta.index, true, nil
-
-	case <-ctx.Done():
-		return store.Index{}, false, ctx.Err()
+	record, tx, dequeued, err := m.store.DequeueWithIndependentTransactionContext(ctx, nil)
+	if err != nil {
+		return store.Index{}, false, err
 	}
+	if !dequeued {
+		return store.Index{}, false, nil
+	}
+
+	now := m.clock.Now()
+	index := record.(store.Index)
+	m.addMeta(request.IndexerName, indexMeta{index: index, tx: tx, started: now})
+	return index, true, nil
+}
+
+// TODO - document
+func (m *manager) addMeta(indexerName string, meta indexMeta) {
+	m.m.Lock()
+	defer m.m.Unlock()
+
+	indexer, ok := m.indexers[indexerName]
+	if !ok {
+		indexer = &indexerMeta{}
+		m.indexers[indexerName] = indexer
+	}
+
+	now := m.clock.Now()
+	indexer.metas = append(indexer.metas, meta)
+	indexer.lastUpdate = now
 }
 
 // Complete marks the target index record as complete or errored depending on the existence of an
 // error message, then finalizes the transaction that locks that record.
-func (m *manager) Complete(ctx context.Context, request CompleteRequest) (bool, error) {
-	envelope := newCompleteRequestEnvelope(ctx, request)
+func (m *manager) Complete(ctx context.Context, request types.CompleteRequest) (bool, error) {
+	ctx, cancel := onecontext.Merge(ctx, m.ctx)
+	defer cancel()
 
-	select {
-	case m.requests <- envelope:
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-
-	select {
-	case response := <-envelope.response:
-		return response.found, response.err
-
-	case <-ctx.Done():
-		return false, ctx.Err()
-	}
-}
-
-// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
-// records whose identifiers were not supplied in the request.
-func (m *manager) Heartbeat(ctx context.Context, request HeartbeatRequest) error {
-	indexer, ok := m.indexers[request.IndexerName]
-	if !ok {
-		indexer = &indexerMeta{}
-	}
-
-	return m.requeueIndexes(ctx, m.pruneIndexes(indexer, request.IndexIDs))
-}
-
-// pruneIndexes removes the indexes whose identifier is not in the given list from the given
-// index agent. This method returns the index meta values which were removed. Index meta values
-// which were created very recently will be counted as live to account for the time between
-// when the record is dequeued in this service and when it is added to the heartbeat requests
-// from the index agent.
-func (m *manager) pruneIndexes(indexer *indexerMeta, ids []int) (dead []indexMeta) {
-	idMap := map[int]struct{}{}
-	for _, id := range ids {
-		idMap[id] = struct{}{}
-	}
-
-	m.m.Lock()
-	defer m.m.Unlock()
-
-	var live []indexMeta
-	for _, meta := range indexer.metas {
-		if _, ok := idMap[meta.index.ID]; ok || m.clock.Now().Sub(meta.started) < m.options.UnreportedIndexMaxAge {
-			live = append(live, meta)
-		} else {
-			dead = append(dead, meta)
-		}
-	}
-
-	indexer.metas = live
-	indexer.lastUpdate = m.clock.Now()
-	return dead
-}
-
-// requeueIndexes requeues the given index records.
-func (m *manager) requeueIndexes(ctx context.Context, metas []indexMeta) (errs error) {
-	for _, meta := range metas {
-		if err := meta.tx.Requeue(ctx, meta.index.ID, m.clock.Now().Add(m.options.RequeueDelay)); err != nil {
-			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to requeue index %d", meta.index.ID)))
-		}
-
-		if err := meta.tx.Done(nil); err != nil {
-			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to close transaction holding index %d", meta.index.ID)))
-		}
-	}
-
-	return errs
-}
-
-// The following methods are run in the goroutine handled by Start and are thus
-// single-threaded. The only locks that need to be applied are to the indexers
-// map, which is updated in other goroutines handling heartbeats and dequeue
-// responses.
-
-// handle dispatches requests send to the goroutine handled by Start.
-func (m *manager) handle(rawRequest interface{}) {
-	switch request := rawRequest.(type) {
-	case dequeueRequestEnvelope:
-		ctx, cancel := onecontext.Merge(m.ctx, request.context)
-		response := m.dequeue(ctx, request.DequeueRequest)
-		cancel()
-		request.response <- response
-
-	case completeRequestEnvelope:
-		ctx, cancel := onecontext.Merge(m.ctx, request.context)
-		response := m.complete(ctx, request.CompleteRequest)
-		cancel()
-		request.response <- response
-
-	default:
-		log15.Error(fmt.Sprintf("unexpected request value: %#v", rawRequest))
-	}
-}
-
-// dequeue selects a queued, unlocked index record and returns an index meta value
-// wrapping the record and the transaction that locks it.
-func (m *manager) dequeue(ctx context.Context, request DequeueRequest) dequeueResponse {
-	if m.countTotalIndexes() > m.options.MaxTransactions {
-		return dequeueResponse{}
-	}
-
-	record, tx, dequeued, err := m.store.Dequeue(ctx, nil)
-	if err != nil {
-		return dequeueResponse{err: err}
-	}
-	if !dequeued {
-		return dequeueResponse{}
-	}
-
-	m.m.Lock()
-	defer m.m.Unlock()
-
-	indexer, ok := m.indexers[request.IndexerName]
-	if !ok {
-		indexer = &indexerMeta{}
-	}
-
-	now := m.clock.Now()
-	meta := indexMeta{index: record.(store.Index), tx: tx, started: now}
-	indexer.metas = append(indexer.metas, meta)
-	indexer.lastUpdate = now
-	return dequeueResponse{meta: meta, dequeued: true}
-}
-
-// countTotalIndexes returns the number of locked index records known by this manager.
-func (m *manager) countTotalIndexes() int {
-	m.m.Lock()
-	defer m.m.Unlock()
-
-	count := 0
-	for _, indexer := range m.indexers {
-		count += len(indexer.metas)
-	}
-
-	return count
-}
-
-// complete finds the target index meta value, removes it from the index agent, marks the
-// index record as complete or errored depending on the existence of an error message,
-// then finalizes the transaction that locks that record.
-func (m *manager) complete(ctx context.Context, request CompleteRequest) completeResponse {
 	index, ok := m.findMeta(request.IndexerName, request.IndexID)
 	if !ok {
-		return completeResponse{}
+		return false, nil
 	}
 
 	if err := m.completeIndex(ctx, index, request.ErrorMessage); err != nil {
-		return completeResponse{err: err}
+		return false, err
 	}
 
-	return completeResponse{found: true}
+	return true, nil
 }
 
 // findMeta finds and returns an index meta value matching the given index identifier. If found,
@@ -375,28 +285,76 @@ func (m *manager) completeIndex(ctx context.Context, meta indexMeta, errorMessag
 	return meta.tx.Done(err)
 }
 
-// cleanup requeues every locked index record assigned to agents which have not been updated for longer
-// than the death threshold.
-func (m *manager) cleanup() {
-	if err := m.requeueIndexes(m.ctx, m.pruneIndexers()); err != nil {
-		log15.Error("failed to requeue indexes", "err", err)
-	}
+// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
+// records whose identifiers were not supplied in the request.
+func (m *manager) Heartbeat(ctx context.Context, request types.HeartbeatRequest) error {
+	return m.requeueIndexes(ctx, m.pruneIndexes(request.IndexerName, request.IndexIDs))
 }
 
-// pruneIndexers removes the data associated with index agents which have not been updated for longer
-// than the death threshold and returns all index meta values assigned to removed index agents.
-func (m *manager) pruneIndexers() (metas []indexMeta) {
+// pruneIndexes removes the indexes whose identifier is not in the given list from the given
+// index agent. This method returns the index meta values which were removed. Index meta values
+// which were created very recently will be counted as live to account for the time between
+// when the record is dequeued in this service and when it is added to the heartbeat requests
+// from the index agent. This method also updates the last updated time of the index agent.
+func (m *manager) pruneIndexes(indexerName string, ids []int) (dead []indexMeta) {
+	now := m.clock.Now()
+
+	idMap := map[int]struct{}{}
+	for _, id := range ids {
+		idMap[id] = struct{}{}
+	}
+
 	m.m.Lock()
 	defer m.m.Unlock()
 
-	for name, indexer := range m.indexers {
-		if m.clock.Now().Sub(indexer.lastUpdate) <= m.options.DeathThreshold {
-			continue
-		}
-
-		metas = append(metas, indexer.metas...)
-		delete(m.indexers, name)
+	indexer, ok := m.indexers[indexerName]
+	if !ok {
+		indexer = &indexerMeta{}
+		m.indexers[indexerName] = indexer
 	}
 
-	return metas
+	var live []indexMeta
+	for _, meta := range indexer.metas {
+		if _, ok := idMap[meta.index.ID]; ok || now.Sub(meta.started) < m.options.UnreportedIndexMaxAge {
+			live = append(live, meta)
+		} else {
+			dead = append(dead, meta)
+		}
+	}
+
+	indexer.metas = live
+	indexer.lastUpdate = now
+	return dead
+}
+
+// requeueIndexes requeues the given index records.
+func (m *manager) requeueIndexes(ctx context.Context, metas []indexMeta) (errs error) {
+	for _, meta := range metas {
+		if err := meta.tx.Requeue(ctx, meta.index.ID, m.clock.Now().Add(m.options.RequeueDelay)); err != nil {
+			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to requeue index %d", meta.index.ID)))
+		}
+
+		if err := meta.tx.Done(nil); err != nil {
+			errs = multierror.Append(errs, errors.Wrap(err, fmt.Sprintf("failed to close transaction holding index %d", meta.index.ID)))
+		}
+	}
+
+	return errs
+}
+
+//
+//
+//
+
+// TODO - use a semaphore instead
+func (m *manager) countTotalIndexes() int {
+	m.m.Lock()
+	defer m.m.Unlock()
+
+	count := 0
+	for _, indexer := range m.indexers {
+		count += len(indexer.metas)
+	}
+
+	return count
 }

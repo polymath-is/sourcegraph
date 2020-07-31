@@ -33,6 +33,7 @@ type Indexer struct {
 type IndexerOptions struct {
 	FrontendURL           string
 	FrontendURLFromDocker string
+	AuthToken             string
 	PollInterval          time.Duration
 	HeartbeatInterval     time.Duration
 	Metrics               IndexerMetrics
@@ -62,7 +63,7 @@ func newIndexer(ctx context.Context, options IndexerOptions, clock glock.Clock) 
 func (i *Indexer) Start() {
 	defer close(i.finished)
 
-	client := client.NewClient(uuid.New().String(), i.options.FrontendURL)
+	client := client.NewClient(uuid.New().String(), i.options.FrontendURL, i.options.AuthToken)
 
 	i.wg.Add(2)
 	go i.poll(client)
@@ -211,7 +212,7 @@ func (i *Indexer) process(index store.Index) error {
 	indexAndUploadCommand := []string{
 		"lsif-go",
 		"&&",
-		"src", "-endpoint", i.options.FrontendURLFromDocker, "lsif", "upload", "-repo", index.RepositoryName, "-commit", index.Commit,
+		"src", "-endpoint", fmt.Sprintf("http://%s", i.options.FrontendURLFromDocker), "lsif", "upload", "-repo", index.RepositoryName, "-commit", index.Commit,
 	}
 
 	if err := command(
@@ -241,14 +242,14 @@ func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error)
 		}
 	}()
 
-	cloneURL, err := makeCloneURL(i.options.FrontendURL, repositoryName)
+	cloneURL, err := makeCloneURL(i.options.FrontendURL, i.options.AuthToken, repositoryName)
 	if err != nil {
 		return "", err
 	}
 
 	commands := [][]string{
 		{"-C", tempDir, "init"},
-		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit}, // TODO - rate limit the fetch
+		{"-C", tempDir, "-c", "protocol.version=2", "fetch", cloneURL.String(), commit},
 		{"-C", tempDir, "checkout", commit},
 	}
 
@@ -261,11 +262,12 @@ func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error)
 	return tempDir, nil
 }
 
-func makeCloneURL(baseURL, repositoryName string) (*url.URL, error) {
+func makeCloneURL(baseURL, authToken, repositoryName string) (*url.URL, error) {
 	base, err := url.Parse(fmt.Sprintf("http://%s", baseURL))
 	if err != nil {
 		return nil, err
 	}
+	base.User = url.UserPassword("indexer", authToken)
 
 	return base.ResolveReference(&url.URL{Path: path.Join(".internal-code-intel", "git", repositoryName)}), nil
 }

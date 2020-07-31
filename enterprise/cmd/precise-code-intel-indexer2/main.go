@@ -26,6 +26,7 @@ func main() {
 	var (
 		frontendURL              = mustGet(rawFrontendURL, "?")
 		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "?")
+		internalProxyAuthToken   = mustGet(rawInternalProxyAuthToken, "PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN")
 		indexerPollInterval      = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
 		indexerHeartbeatInterval = mustParseInterval(rawIndexerHeartbeatInterval, "PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL")
 	)
@@ -41,6 +42,7 @@ func main() {
 	indexer := indexer.NewIndexer(context.Background(), indexer.IndexerOptions{
 		FrontendURL:           frontendURL,
 		FrontendURLFromDocker: frontendURLFromDocker,
+		AuthToken:             internalProxyAuthToken,
 		PollInterval:          indexerPollInterval,
 		HeartbeatInterval:     indexerHeartbeatInterval,
 		Metrics:               indexerMetrics,

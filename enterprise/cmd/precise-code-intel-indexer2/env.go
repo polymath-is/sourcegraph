@@ -10,6 +10,7 @@ import (
 var (
 	rawFrontendURL              = "localhost:3080"            // TODO - configure
 	rawFrontendURLFromDocker    = "host.docker.internal:3080" // TODO - configure
+	rawInternalProxyAuthToken   = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied to the frontend.")
 	rawIndexerPollInterval      = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
 	rawIndexerHeartbeatInterval = env.Get("PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL", "1s", "Interval between heartbeat requests.")
 )

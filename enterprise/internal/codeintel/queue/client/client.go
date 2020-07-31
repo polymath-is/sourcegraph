@@ -40,6 +40,7 @@ type Client interface {
 type client struct {
 	indexerName string
 	frontendURL string
+	authToken   string
 	httpClient  *http.Client
 	userAgent   string
 }
@@ -57,11 +58,12 @@ var defaultTransport = &ot.Transport{
 }
 
 // NewClient creates a new Client with the given unique name targetting hte given external frontend API.
-func NewClient(indexerName, frontendURL string) Client {
+func NewClient(indexerName, frontendURL, authToken string) Client {
 	return &client{
 		indexerName: indexerName,
 		httpClient:  &http.Client{Transport: defaultTransport},
 		frontendURL: frontendURL,
+		authToken:   authToken,
 		userAgent:   filepath.Base(os.Args[0]),
 	}
 }
@@ -70,7 +72,7 @@ func NewClient(indexerName, frontendURL string) Client {
 // or failed by calling Complete with the same identifier. While processing, the identifier of
 // the record must appear in all heartbeat requests.
 func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ error) {
-	url, err := makeQueueURL(c.frontendURL, "dequeue")
+	url, err := makeQueueURL(c.frontendURL, c.authToken, "dequeue")
 	if err != nil {
 		return store.Index{}, false, err
 	}
@@ -101,7 +103,7 @@ func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ erro
 // Complete marks the target index record as complete or errored depending on the existence of an
 // error message.
 func (c *client) Complete(ctx context.Context, indexID int, indexErr error) error {
-	url, err := makeQueueURL(c.frontendURL, "complete")
+	url, err := makeQueueURL(c.frontendURL, c.authToken, "complete")
 	if err != nil {
 		return err
 	}
@@ -125,7 +127,7 @@ func (c *client) Complete(ctx context.Context, indexID int, indexErr error) erro
 // Heartbeat hints to the index queue that the indexer system is has not been lost and should not
 // release any of the index records assigned to the index agent.
 func (c *client) Heartbeat(ctx context.Context, indexIDs []int) error {
-	url, err := makeQueueURL(c.frontendURL, "heartbeat")
+	url, err := makeQueueURL(c.frontendURL, c.authToken, "heartbeat")
 	if err != nil {
 		return err
 	}
@@ -199,11 +201,12 @@ func (c *client) do(ctx context.Context, method string, url *url.URL, body io.Re
 	return true, resp.Body, nil
 }
 
-func makeQueueURL(baseURL, op string) (*url.URL, error) {
+func makeQueueURL(baseURL, authToken, op string) (*url.URL, error) {
 	base, err := url.Parse(fmt.Sprintf("http://%s", baseURL))
 	if err != nil {
 		return nil, err
 	}
+	base.User = url.UserPassword("indexer", authToken)
 
 	return base.ResolveReference(&url.URL{Path: path.Join(".internal-code-intel", "index-queue", op)}), nil
 }

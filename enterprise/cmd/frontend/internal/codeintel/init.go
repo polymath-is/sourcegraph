@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 
-	"github.com/gorilla/mux"
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +28,7 @@ import (
 var bundleManagerURL = env.Get("PRECISE_CODE_INTEL_BUNDLE_MANAGER_URL", "", "HTTP address for the internal LSIF bundle manager server.")
 var rawHunkCacheSize = env.Get("PRECISE_CODE_INTEL_HUNK_CACHE_CAPACITY", "1000", "Maximum number of git diff hunk objects that can be loaded into the hunk cache at once.")
 var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEXER_URL", "", "HTTP address for the internal LSIF indexer server.")
+var internalProxyAuthToken = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied by the cluster-external precise code intel services.")
 
 func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 	if bundleManagerURL == "" {
@@ -70,44 +69,11 @@ func Init(ctx context.Context, enterpriseServices *enterprise.Services) error {
 		return codeintelhttpapi.NewUploadHandler(store, bundleManagerClient, false)
 	}
 
-	enterpriseServices.NewCodeIntelInternalProxyHandler = func() http.Handler {
-		base := mux.NewRouter().PathPrefix("/.internal-code-intel/").Subrouter()
-		base.StrictSlash(true)
-
-		//
-		// TODO - token middleware here
-		//
-
-		base.Path("/git/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			location, err := url.Parse("http://localhost:3090/.internal/git/" + mux.Vars(r)["rest"])
-			if err != nil {
-				fmt.Printf("OH NO: %s\n", err) // TODO - log
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			location.RawQuery = r.URL.RawQuery
-
-			// TODO - do a reverse proxy not a redirect here, or call the handlers directly if possible
-			w.Header().Set("Location", location.String())
-			w.WriteHeader(http.StatusTemporaryRedirect)
-		})
-
-		base.Path("/index-queue/{rest:.*}").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			location, err := url.Parse(indexerURL + "/" + mux.Vars(r)["rest"])
-			if err != nil {
-				fmt.Printf("OH NO: %s\n", err) // TODO - log
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			location.RawQuery = r.URL.RawQuery
-
-			// TODO - do a reverse proxy not a redirect here
-			w.Header().Set("Location", location.String())
-			w.WriteHeader(http.StatusTemporaryRedirect)
-		})
-
-		return base
+	newCodeIntelInternalProxyHandler, err := makeInternalProxyHandlerFactory()
+	if err != nil {
+		return err
 	}
 
+	enterpriseServices.NewCodeIntelInternalProxyHandler = newCodeIntelInternalProxyHandler
 	return nil
 }

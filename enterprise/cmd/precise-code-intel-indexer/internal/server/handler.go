@@ -69,6 +69,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.indexManager.Heartbeat(r.Context(), payload)
+	if err := s.indexManager.Heartbeat(r.Context(), payload); err != nil {
+		log15.Error("Failed to acknowledge heartbeat", "err", err)
+		http.Error(w, fmt.Sprintf("failed to acknowledge heartbeat: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
