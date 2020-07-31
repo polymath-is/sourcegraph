@@ -59,6 +59,9 @@ export SRC_SYNTECT_SERVER=http://localhost:9238
 export SRC_FRONTEND_INTERNAL=localhost:3090
 export SRC_PROF_HTTP=
 
+export SRC_EXTERNAL_URL=http://localhost:3180
+export SRC_EXTERNAL_URL_FROM_DOCKER=http://host.docker.internal:3080
+
 SRC_PROF_SERVICES=$(cat dev/src-prof-services.json)
 export SRC_PROF_SERVICES
 

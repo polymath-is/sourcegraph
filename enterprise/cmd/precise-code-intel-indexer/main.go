@@ -42,6 +42,10 @@ func main() {
 		indexMinimumSearchRatio          = mustParsePercent(rawIndexMinimumSearchRatio, "PRECISE_CODE_INTEL_INDEX_MINIMUM_SEARCH_RATIO")
 		indexMinimumPreciseCount         = mustParseInt(rawIndexMinimumPreciseCount, "PRECISE_CODE_INTEL_INDEX_MINIMUM_PRECISE_COUNT")
 		disableJanitor                   = mustParseBool(rawDisableJanitor, "PRECISE_CODE_INTEL_DISABLE_JANITOR")
+		maximumTransactions              = mustParseInt(rawMaxTransactions, "PRECISE_CODE_INTEL_MAXIMUM_TRANSACTIONS")
+		requeueDelay                     = mustParseInterval(rawRequeueDelay, "PRECISE_CODE_INTEL_REQUEUE_DELAY")
+		cleanupInterval                  = mustParseInterval(rawCleanupInterval, "PRECISE_CODE_INTEL_CLEANUP_INTERVAL")
+		maximumMissedHeartbeats          = mustParseInt(rawMissedHeartbeats, "PRECISE_CODE_INTEL_MAXIMUM_MISSED_HEARTBEATS")
 	)
 
 	observationContext := &observation.Context{
@@ -57,11 +61,11 @@ func main() {
 	indexabilityUpdaterMetrics := indexabilityupdater.NewUpdaterMetrics(prometheus.DefaultRegisterer)
 	schedulerMetrics := scheduler.NewSchedulerMetrics(prometheus.DefaultRegisterer)
 	indexManager := indexmanager.New(store.WorkerutilIndexStore(s), indexmanager.ManagerOptions{
-		MaxTransactions:       10,               // TODO - configure
-		RequeueDelay:          time.Second * 10, // TODO - configure
-		DeathThreshold:        time.Second * 10, // TODO - configure
-		CleanupInterval:       time.Second * 10, // TODO - configure
-		UnreportedIndexMaxAge: time.Second * 10, // TODO - configure
+		MaximumTransactions:   maximumTransactions,
+		RequeueDelay:          requeueDelay,
+		CleanupInterval:       cleanupInterval,
+		UnreportedIndexMaxAge: cleanupInterval * time.Duration(maximumMissedHeartbeats),
+		DeathThreshold:        cleanupInterval * time.Duration(maximumMissedHeartbeats),
 	})
 	server := server.New(indexManager)
 	indexResetter := resetter.NewIndexResetter(s, resetInterval, resetterMetrics)

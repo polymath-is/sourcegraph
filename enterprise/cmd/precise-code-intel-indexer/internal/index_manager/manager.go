@@ -46,19 +46,14 @@ type ThreadedManager interface {
 }
 
 type ManagerOptions struct {
-	// MaxTransactions is the maximum number of active records that can be given out to index agents.
+	// MaximumTransactions is the maximum number of active records that can be given out to index agents.
 	// The manager dequeue method will stop returning records while the number of outstanding transactions
 	// is at this threshold.
-	MaxTransactions int
+	MaximumTransactions int
 
 	// RequeueDelay controls how far into the future to make an index agent's records visible to another
 	// agent once it becomes unresponsive.
 	RequeueDelay time.Duration
-
-	// DeathThreshold is the minimum time since the last index agent heartbeat before the agent can be
-	// considered as unresponsive. This should be configured to be longer than the index agent's heartbeat
-	// interval.
-	DeathThreshold time.Duration
 
 	// CleanupInterval is the duration between cleanup invocations, in which the index records assigned to
 	// dead index agents are requeued.
@@ -67,6 +62,11 @@ type ManagerOptions struct {
 	// UnreportedMaxAge is the maximum time between an index record being dequeued and it appearing in the
 	// index agent's heartbeat requests before it being considered lost.
 	UnreportedIndexMaxAge time.Duration
+
+	// DeathThreshold is the minimum time since the last index agent heartbeat before the agent can be
+	// considered as unresponsive. This should be configured to be longer than the index agent's heartbeat
+	// interval.
+	DeathThreshold time.Duration
 }
 
 type manager struct {
@@ -106,8 +106,8 @@ func New(store workerutil.Store, options ManagerOptions) ThreadedManager {
 func newManager(store workerutil.Store, options ManagerOptions, clock glock.Clock) ThreadedManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	dequeueSemaphore := make(chan struct{}, options.MaxTransactions)
-	for i := 0; i < options.MaxTransactions; i++ {
+	dequeueSemaphore := make(chan struct{}, options.MaximumTransactions)
+	for i := 0; i < options.MaximumTransactions; i++ {
 		dequeueSemaphore <- struct{}{}
 	}
 

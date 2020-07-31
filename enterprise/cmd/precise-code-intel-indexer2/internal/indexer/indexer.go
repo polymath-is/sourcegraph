@@ -212,7 +212,7 @@ func (i *Indexer) process(index store.Index) error {
 	indexAndUploadCommand := []string{
 		"lsif-go",
 		"&&",
-		"src", "-endpoint", fmt.Sprintf("http://%s", i.options.FrontendURLFromDocker), "lsif", "upload", "-repo", index.RepositoryName, "-commit", index.Commit,
+		"src", "-endpoint", fmt.Sprintf(i.options.FrontendURLFromDocker), "lsif", "upload", "-repo", index.RepositoryName, "-commit", index.Commit,
 	}
 
 	if err := command(
@@ -263,7 +263,7 @@ func (i *Indexer) fetchRepository(repositoryName, commit string) (string, error)
 }
 
 func makeCloneURL(baseURL, authToken, repositoryName string) (*url.URL, error) {
-	base, err := url.Parse(fmt.Sprintf("http://%s", baseURL))
+	base, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
 	}

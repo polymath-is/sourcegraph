@@ -24,8 +24,8 @@ func main() {
 	tracer.Init()
 
 	var (
-		frontendURL              = mustGet(rawFrontendURL, "?")
-		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "?")
+		frontendURL              = mustGet(rawFrontendURL, "SRC_EXTERNAL_URL")
+		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "SRC_EXTERNAL_URL_FROM_DOCKER")
 		internalProxyAuthToken   = mustGet(rawInternalProxyAuthToken, "PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN")
 		indexerPollInterval      = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
 		indexerHeartbeatInterval = mustParseInterval(rawIndexerHeartbeatInterval, "PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL")
@@ -35,6 +35,10 @@ func main() {
 		Logger:     log15.Root(),
 		Tracer:     &trace.Tracer{Tracer: opentracing.GlobalTracer()},
 		Registerer: prometheus.DefaultRegisterer,
+	}
+
+	if frontendURLFromDocker == "" {
+		frontendURLFromDocker = frontendURL
 	}
 
 	server := server.New()
