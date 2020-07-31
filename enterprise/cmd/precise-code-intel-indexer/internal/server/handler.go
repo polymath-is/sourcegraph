@@ -27,7 +27,7 @@ func (s *Server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	index, dequeued, err := s.indexManager.Dequeue(r.Context(), payload)
+	index, dequeued, err := s.indexManager.Dequeue(r.Context(), payload.IndexerName)
 	if err != nil {
 		log15.Error("Failed to dequeue index", "err", err)
 		http.Error(w, fmt.Sprintf("failed to dequeue index: %s", err.Error()), http.StatusInternalServerError)
@@ -48,7 +48,7 @@ func (s *Server) handleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, err := s.indexManager.Complete(r.Context(), payload)
+	found, err := s.indexManager.Complete(r.Context(), payload.IndexerName, payload.IndexID, payload.ErrorMessage)
 	if err != nil {
 		log15.Error("Failed to complete index job", "err", err)
 		http.Error(w, fmt.Sprintf("failed to complete index job: %s", err.Error()), http.StatusInternalServerError)
@@ -69,7 +69,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.indexManager.Heartbeat(r.Context(), payload); err != nil {
+	if err := s.indexManager.Heartbeat(r.Context(), payload.IndexerName, payload.IndexIDs); err != nil {
 		log15.Error("Failed to acknowledge heartbeat", "err", err)
 		http.Error(w, fmt.Sprintf("failed to acknowledge heartbeat: %s", err.Error()), http.StatusInternalServerError)
 		return

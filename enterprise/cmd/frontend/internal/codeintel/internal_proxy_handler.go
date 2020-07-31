@@ -5,25 +5,31 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 
 	"github.com/gorilla/mux"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	frontendenv "github.com/sourcegraph/sourcegraph/cmd/frontend/env"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 )
 
 var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEXER_URL", "", "HTTP address for the internal LSIF indexer server.")
 var internalProxyAuthToken = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied by the cluster-external precise code intel services.")
 
-// defined in cmd/frontend/internal/cli/serve_cmd.go
-var httpAddrInternal = os.Getenv("SRC_HTTP_ADDR_INTERNAL")
-
 func makeInternalProxyHandlerFactory() (func() http.Handler, error) {
-	frontendOrigin, err := url.Parse(fmt.Sprintf("http://%s/.internal/git", httpAddrInternal))
+	host, port, err := net.SplitHostPort(frontendenv.HTTPAddrInternal)
+	if err != nil {
+		return nil, errors.Wrap(err, fmt.Sprintf("failed to parse internal API address '%s'", frontendenv.HTTPAddrInternal))
+	}
+	if host == "" {
+		host = "localhost"
+	}
+
+	frontendOrigin, err := url.Parse(fmt.Sprintf("http://%s:%s/.internal/git", host, port))
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to construct the origin for the internal frontend")
 	}
