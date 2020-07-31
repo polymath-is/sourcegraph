@@ -23,7 +23,8 @@ type Services struct {
 type NewCodeIntelUploadHandler func() http.Handler
 
 // NewCodeIntelInternalProxyHandler creates a new proxy handler for internal code intel routes
-// accessible from the precise-code-intel-indexer (which is deployed separately from the k8s cluster).
+// accessible from the precise-code-intel-index-agent (which is deployed separately from the k8s
+// cluster).
 type NewCodeIntelInternalProxyHandler func() http.Handler
 
 // DefaultServices creates a new Services value that has default implementations for all services.

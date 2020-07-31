@@ -202,7 +202,7 @@ func (c *client) do(ctx context.Context, method string, url *url.URL, body io.Re
 }
 
 func makeQueueURL(baseURL, authToken, op string) (*url.URL, error) {
-	base, err := url.Parse(fmt.Sprintf("http://%s", baseURL))
+	base, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
 	}

@@ -24,6 +24,6 @@ postgres_exporter: ./dev/postgres_exporter.sh
 
 # Additional enterprise services
 precise-code-intel-bundle-manager: precise-code-intel-bundle-manager
-precise-code-intel-indexer: precise-code-intel-indexer
-precise-code-intel-indexer2: precise-code-intel-indexer2
+precise-code-intel-index-agent: precise-code-intel-index-agent
+precise-code-intel-index-queue: precise-code-intel-index-queue
 precise-code-intel-worker: precise-code-intel-worker

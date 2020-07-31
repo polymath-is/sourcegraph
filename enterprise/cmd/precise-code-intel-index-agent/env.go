@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	rawFrontendURL              = env.Get("SRC_EXTERNAL_URL", "", "The external URL of the sourcegraph instance.")
-	rawFrontendURLFromDocker    = env.Get("SRC_EXTERNAL_URL_FROM_DOCKER", "", "The external URL of the sourcegraph instance used form within an index container.")
+	rawFrontendURL              = env.Get("PRECISE_CODE_INTEL_EXTERNAL_URL", "", "The external URL of the sourcegraph instance.")
+	rawFrontendURLFromDocker    = env.Get("PRECISE_CODE_INTEL_EXTERNAL_URL_FROM_DOCKER", "", "The external URL of the sourcegraph instance used form within an index container.")
 	rawInternalProxyAuthToken   = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied to the frontend.")
 	rawIndexerPollInterval      = env.Get("PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL", "1s", "Interval between queries to the index queue.")
 	rawIndexerHeartbeatInterval = env.Get("PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL", "1s", "Interval between heartbeat requests.")

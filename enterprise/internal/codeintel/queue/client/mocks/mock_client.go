@@ -40,7 +40,7 @@ func NewMockClient() *MockClient {
 			},
 		},
 		HeartbeatFunc: &ClientHeartbeatFunc{
-			defaultHook: func(context.Context) error {
+			defaultHook: func(context.Context, []int) error {
 				return nil
 			},
 		},
@@ -282,23 +282,23 @@ func (c ClientDequeueFuncCall) Results() []interface{} {
 // ClientHeartbeatFunc describes the behavior when the Heartbeat method of
 // the parent MockClient instance is invoked.
 type ClientHeartbeatFunc struct {
-	defaultHook func(context.Context) error
-	hooks       []func(context.Context) error
+	defaultHook func(context.Context, []int) error
+	hooks       []func(context.Context, []int) error
 	history     []ClientHeartbeatFuncCall
 	mutex       sync.Mutex
 }
 
 // Heartbeat delegates to the next hook function in the queue and stores the
 // parameter and result values of this invocation.
-func (m *MockClient) Heartbeat(v0 context.Context) error {
-	r0 := m.HeartbeatFunc.nextHook()(v0)
-	m.HeartbeatFunc.appendCall(ClientHeartbeatFuncCall{v0, r0})
+func (m *MockClient) Heartbeat(v0 context.Context, v1 []int) error {
+	r0 := m.HeartbeatFunc.nextHook()(v0, v1)
+	m.HeartbeatFunc.appendCall(ClientHeartbeatFuncCall{v0, v1, r0})
 	return r0
 }
 
 // SetDefaultHook sets function that is called when the Heartbeat method of
 // the parent MockClient instance is invoked and the hook queue is empty.
-func (f *ClientHeartbeatFunc) SetDefaultHook(hook func(context.Context) error) {
+func (f *ClientHeartbeatFunc) SetDefaultHook(hook func(context.Context, []int) error) {
 	f.defaultHook = hook
 }
 
@@ -306,7 +306,7 @@ func (f *ClientHeartbeatFunc) SetDefaultHook(hook func(context.Context) error) {
 // Heartbeat method of the parent MockClient instance inovkes the hook at
 // the front of the queue and discards it. After the queue is empty, the
 // default hook function is invoked for any future action.
-func (f *ClientHeartbeatFunc) PushHook(hook func(context.Context) error) {
+func (f *ClientHeartbeatFunc) PushHook(hook func(context.Context, []int) error) {
 	f.mutex.Lock()
 	f.hooks = append(f.hooks, hook)
 	f.mutex.Unlock()
@@ -315,7 +315,7 @@ func (f *ClientHeartbeatFunc) PushHook(hook func(context.Context) error) {
 // SetDefaultReturn calls SetDefaultDefaultHook with a function that returns
 // the given values.
 func (f *ClientHeartbeatFunc) SetDefaultReturn(r0 error) {
-	f.SetDefaultHook(func(context.Context) error {
+	f.SetDefaultHook(func(context.Context, []int) error {
 		return r0
 	})
 }
@@ -323,12 +323,12 @@ func (f *ClientHeartbeatFunc) SetDefaultReturn(r0 error) {
 // PushReturn calls PushDefaultHook with a function that returns the given
 // values.
 func (f *ClientHeartbeatFunc) PushReturn(r0 error) {
-	f.PushHook(func(context.Context) error {
+	f.PushHook(func(context.Context, []int) error {
 		return r0
 	})
 }
 
-func (f *ClientHeartbeatFunc) nextHook() func(context.Context) error {
+func (f *ClientHeartbeatFunc) nextHook() func(context.Context, []int) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -364,6 +364,9 @@ type ClientHeartbeatFuncCall struct {
 	// Arg0 is the value of the 1st argument passed to this method
 	// invocation.
 	Arg0 context.Context
+	// Arg1 is the value of the 2nd argument passed to this method
+	// invocation.
+	Arg1 []int
 	// Result0 is the value of the 1st result returned from this method
 	// invocation.
 	Result0 error
@@ -372,7 +375,7 @@ type ClientHeartbeatFuncCall struct {
 // Args returns an interface slice containing the arguments of this
 // invocation.
 func (c ClientHeartbeatFuncCall) Args() []interface{} {
-	return []interface{}{c.Arg0}
+	return []interface{}{c.Arg0, c.Arg1}
 }
 
 // Results returns an interface slice containing the results of this

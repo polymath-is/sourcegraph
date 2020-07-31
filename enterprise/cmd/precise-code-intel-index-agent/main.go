@@ -9,8 +9,8 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer2/internal/indexer"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer2/internal/server"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-agent/internal/indexer"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-agent/internal/server"
 	"github.com/sourcegraph/sourcegraph/internal/debugserver"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/observation"
@@ -24,8 +24,8 @@ func main() {
 	tracer.Init()
 
 	var (
-		frontendURL              = mustGet(rawFrontendURL, "SRC_EXTERNAL_URL")
-		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "SRC_EXTERNAL_URL_FROM_DOCKER")
+		frontendURL              = mustGet(rawFrontendURL, "PRECISE_CODE_INTEL_EXTERNAL_URL")
+		frontendURLFromDocker    = mustGet(rawFrontendURLFromDocker, "PRECISE_CODE_INTEL_EXTERNAL_URL_FROM_DOCKER")
 		internalProxyAuthToken   = mustGet(rawInternalProxyAuthToken, "PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN")
 		indexerPollInterval      = mustParseInterval(rawIndexerPollInterval, "PRECISE_CODE_INTEL_INDEXER_POLL_INTERVAL")
 		indexerHeartbeatInterval = mustParseInterval(rawIndexerHeartbeatInterval, "PRECISE_CODE_INTEL_INDEXER_HEARTBEAT_INTERVAL")

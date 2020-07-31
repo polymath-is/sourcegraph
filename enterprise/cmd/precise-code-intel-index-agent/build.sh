@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# This script builds the precise-code-intel-indexer docker image.
+# This script builds the precise-code-intel-index-agent docker image.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 set -eu
@@ -18,11 +18,11 @@ export GOOS=linux
 export CGO_ENABLED=0
 
 echo "--- go build"
-pkg="github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer2"
+pkg="github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-agent"
 go build -trimpath -ldflags "-X github.com/sourcegraph/sourcegraph/internal/version.version=$VERSION" -buildmode exe -tags dist -o "$OUTPUT/$(basename $pkg)" "$pkg"
 
 echo "--- docker build"
-docker build -f enterprise/cmd/precise-code-intel-indexer2/Dockerfile -t "$IMAGE" "$OUTPUT" \
+docker build -f enterprise/cmd/precise-code-intel-index-agent/Dockerfile -t "$IMAGE" "$OUTPUT" \
   --progress=plain \
   --build-arg COMMIT_SHA \
   --build-arg DATE \

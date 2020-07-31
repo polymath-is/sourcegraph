@@ -4,14 +4,14 @@ package mocks
 
 import (
 	"context"
-	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/index_manager"
 	store "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"sync"
 )
 
 // MockManager is a mock implementation of the Manager interface (from the
 // package
-// github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-indexer/internal/index_manager)
+// github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/index_manager)
 // used for unit testing.
 type MockManager struct {
 	// CompleteFunc is an instance of a mock function object controlling the
