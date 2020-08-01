@@ -779,6 +779,7 @@ enum ChangesetPublicationState {
 enum ChangesetReconcilerState {
     # The changeset is enqueued for the reconciler to process it.
     QUEUED
+
     # The changeset reconciler is currently computing the delta between the
     # If a delta exists, the reconciler tries to update the state of the
     # changeset on the code host and on Sourcegraph to the desired state.
