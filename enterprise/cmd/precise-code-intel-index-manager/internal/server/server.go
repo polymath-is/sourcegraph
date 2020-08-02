@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/inconshreveable/log15"
-	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/index_manager"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/index_manager"
 	"github.com/sourcegraph/sourcegraph/internal/env"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 )

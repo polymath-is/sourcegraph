@@ -10,12 +10,12 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
-	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/index_manager"
-	indexabilityupdater "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/indexability_updater"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/janitor"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/resetter"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/scheduler"
-	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-queue/internal/server"
+	indexmanager "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/index_manager"
+	indexabilityupdater "github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/indexability_updater"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/janitor"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/resetter"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/scheduler"
+	"github.com/sourcegraph/sourcegraph/enterprise/cmd/precise-code-intel-index-manager/internal/server"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/gitserver"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/store"
 	"github.com/sourcegraph/sourcegraph/internal/conf"
@@ -116,6 +116,7 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// TODO - something doesn't stop well here
 	indexManager.Stop()
 	server.Stop()
 	indexResetter.Stop()

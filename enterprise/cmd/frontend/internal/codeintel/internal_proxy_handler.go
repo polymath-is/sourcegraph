@@ -17,7 +17,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/env"
 )
 
-var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEX_QUEUE_URL", "", "HTTP address for the internal LSIF indexer server.")
+var indexerURL = env.Get("PRECISE_CODE_INTEL_INDEX_MANAGER_URL", "", "HTTP address for the internal precise-code-intel-indexer-manager.")
 var internalProxyAuthToken = env.Get("PRECISE_CODE_INTEL_INTERNAL_PROXY_AUTH_TOKEN", "", "The auth token supplied by the cluster-external precise code intel services.")
 
 func makeInternalProxyHandlerFactory() (func() http.Handler, error) {
@@ -35,11 +35,11 @@ func makeInternalProxyHandlerFactory() (func() http.Handler, error) {
 	}
 
 	if indexerURL == "" {
-		return nil, fmt.Errorf("invalid value for PRECISE_CODE_INTEL_INDEX_QUEUE_URL: no value supplied")
+		return nil, fmt.Errorf("invalid value for PRECISE_CODE_INTEL_INDEX_MANAGER_URL: no value supplied")
 	}
 	indexerOrigin, err := url.Parse(indexerURL)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to construct the origin for the precise-code-intel-index-queue")
+		return nil, errors.Wrap(err, "failed to construct the origin for the precise-code-intel-index-manager")
 	}
 
 	factory := func() http.Handler {

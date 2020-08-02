@@ -14,10 +14,10 @@ import (
 	"github.com/teivah/onecontext"
 )
 
-// Manager tracks which index records are assigned to which index agents.
+// Manager tracks which index records are assigned to which indexers.
 type Manager interface {
-	// Start runs the routine that handles expiration of transactions for index agents which have
-	// become unresponsive. This method blocks until Stop has been called.
+	// Start runs the routine that handles expiration of transactions for indexers which have become
+	// unresponsive. This method blocks until Stop has been called.
 	Start()
 
 	// Stop will cause Start to exit after the current request. This method blocks until Start has
@@ -34,7 +34,7 @@ type Manager interface {
 	// an error message, then finalizes the transaction that locks that record.
 	Complete(ctx context.Context, indexerName string, indexID int, errorMessage string) (bool, error)
 
-	// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
+	// Heartbeat bumps the last updated time of the indexer and closes any transactions locking
 	// records whose identifiers were not supplied.
 	Heartbeat(ctx context.Context, indexerName string, indexIDs []int) error
 }
@@ -46,25 +46,25 @@ type ThreadedManager interface {
 }
 
 type ManagerOptions struct {
-	// MaximumTransactions is the maximum number of active records that can be given out to index agents.
-	// The manager dequeue method will stop returning records while the number of outstanding transactions
-	// is at this threshold.
+	// MaximumTransactions is the maximum number of active records that can be given out to indexers. The
+	// manager dequeue method will stop returning records while the number of outstanding transactions is
+	// at this threshold.
 	MaximumTransactions int
 
-	// RequeueDelay controls how far into the future to make an index agent's records visible to another
+	// RequeueDelay controls how far into the future to make an indexer's records visible to another
 	// agent once it becomes unresponsive.
 	RequeueDelay time.Duration
 
-	// CleanupInterval is the duration between cleanup invocations, in which the index records assigned to
-	// dead index agents are requeued.
+	// CleanupInterval is the duration between cleanup invocations, in which the index records assigned
+	// to dead indexers are requeued.
 	CleanupInterval time.Duration
 
-	// UnreportedMaxAge is the maximum time between an index record being dequeued and it appearing in the
-	// index agent's heartbeat requests before it being considered lost.
+	// UnreportedMaxAge is the maximum time between an index record being dequeued and it appearing in
+	// the indexer's heartbeat requests before it being considered lost.
 	UnreportedIndexMaxAge time.Duration
 
-	// DeathThreshold is the minimum time since the last index agent heartbeat before the agent can be
-	// considered as unresponsive. This should be configured to be longer than the index agent's heartbeat
+	// DeathThreshold is the minimum time since the last indexerheartbeat before the indexer can be
+	// considered as unresponsive. This should be configured to be longer than the indexer's heartbeat
 	// interval.
 	DeathThreshold time.Duration
 }
@@ -83,15 +83,14 @@ type manager struct {
 
 var _ Manager = &manager{}
 
-// indexerMeta tracks the last request time of an index agent along with the set of
-// index records which it is currently processing.
+// indexerMeta tracks the last request time of an indexer along with the set of index records which it
+// is currently processing.
 type indexerMeta struct {
 	lastUpdate time.Time
 	metas      []indexMeta
 }
 
-// indexMeta wraps an index record and the tranaction that is currently locking
-// it for processing.
+// indexMeta wraps an index record and the tranaction that is currently locking it for processing.
 type indexMeta struct {
 	index   store.Index
 	tx      workerutil.Store
@@ -123,8 +122,8 @@ func newManager(store workerutil.Store, options ManagerOptions, clock glock.Cloc
 	}
 }
 
-// Start runs the routine that handles expiration of transactions for index agents which have
-// become unresponsive. This method blocks until Stop has been called.
+// Start runs the routine that handles expiration of transactions for indexers which have become
+// unresponsive. This method blocks until Stop has been called.
 func (m *manager) Start() {
 	defer close(m.finished)
 
@@ -151,16 +150,16 @@ loop:
 	}
 }
 
-// cleanup requeues every locked index record assigned to agents which have not been updated for longer
-// than the death threshold.
+// cleanup requeues every locked index record assigned to indexers which have not been updated
+// for longer than the death threshold.
 func (m *manager) cleanup() {
 	if err := m.requeueIndexes(m.ctx, m.pruneIndexers()); err != nil {
 		log15.Error("Failed to requeue indexes", "err", err)
 	}
 }
 
-// pruneIndexers removes the data associated with index agents which have not been updated for longer
-// than the death threshold and returns all index meta values assigned to removed index agents.
+// pruneIndexers removes the data associated with indexers which have not been updated for longer
+// than the death threshold and returns all index meta values assigned to removed indexers.
 func (m *manager) pruneIndexers() (metas []indexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -220,8 +219,8 @@ func (m *manager) Dequeue(ctx context.Context, indexerName string) (_ store.Inde
 	return index, true, nil
 }
 
-// addMeta removes the given index to the given index agent. This method also updates the last
-// updated time of the index agent.
+// addMeta removes the given index to the given indexer. This method also updates the last
+// updated time of the indexer.
 func (m *manager) addMeta(indexerName string, meta indexMeta) {
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -256,7 +255,7 @@ func (m *manager) Complete(ctx context.Context, indexerName string, indexID int,
 }
 
 // findMeta finds and returns an index meta value matching the given index identifier. If found,
-// the meta value is removed from the index agent.
+// the meta value is removed from the indexer.
 func (m *manager) findMeta(indexerName string, indexID int) (indexMeta, bool) {
 	m.m.Lock()
 	defer m.m.Unlock()
@@ -294,17 +293,17 @@ func (m *manager) completeIndex(ctx context.Context, meta indexMeta, errorMessag
 	return meta.tx.Done(err)
 }
 
-// Heartbeat bumps the last updated time of the index agent and closes any transactions locking
+// Heartbeat bumps the last updated time of the indexer and closes any transactions locking
 // records whose identifiers were not supplied.
 func (m *manager) Heartbeat(ctx context.Context, indexerName string, indexIDs []int) error {
 	return m.requeueIndexes(ctx, m.pruneIndexes(indexerName, indexIDs))
 }
 
-// pruneIndexes removes the indexes whose identifier is not in the given list from the given
-// index agent. This method returns the index meta values which were removed. Index meta values
-// which were created very recently will be counted as live to account for the time between
-// when the record is dequeued in this service and when it is added to the heartbeat requests
-// from the index agent. This method also updates the last updated time of the index agent.
+// pruneIndexes removes the indexes whose identifier is not in the given list from the given indexer.
+// This method returns the index meta values which were removed. Index meta values which were created
+// very recently will be counted as live to account for the time between when the record is dequeued
+// in this service and when it is added to the heartbeat requests from the indexer. This method also
+// updates the last updated time of the indexer.
 func (m *manager) pruneIndexes(indexerName string, ids []int) (dead []indexMeta) {
 	now := m.clock.Now()
 

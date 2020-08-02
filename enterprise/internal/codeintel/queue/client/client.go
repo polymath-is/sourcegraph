@@ -21,7 +21,7 @@ import (
 	"golang.org/x/net/context/ctxhttp"
 )
 
-// Client is the interface to the precise-code-intel index queue.
+// Client is the interface to the precise-code-intel-index-manager.
 type Client interface {
 	// Dequeue returns a queued index record for processing. This record can be marked as completed
 	// or failed by calling Complete with the same identifier. While processing, the identifier of
@@ -32,8 +32,8 @@ type Client interface {
 	// error message.
 	Complete(ctx context.Context, indexID int, indexErr error) error
 
-	// Heartbeat hints to the index queue that the indexer system is has not been lost and should not
-	// release any of the index records assigned to the index agent.
+	// Heartbeat hints to the index manager that the indexer system is has not been lost and should not
+	// release any of the index records assigned to the indexer.
 	Heartbeat(ctx context.Context, indexIDs []int) error
 }
 
@@ -47,9 +47,9 @@ type client struct {
 
 var _ Client = &client{}
 
-var requestMeter = metrics.NewRequestMeter("precise_code_intel_index_queue", "Total number of requests sent to precise code intel index queue.")
+var requestMeter = metrics.NewRequestMeter("precise_code_intel_index_manager", "Total number of requests sent to precise-code-intel-index-manager.")
 
-// defaultTransport is the default transport for precise code intel index queue clients.
+// defaultTransport is the default transport for precise code intel index manager clients.
 // ot.Transport will propagate opentracing spans.
 var defaultTransport = &ot.Transport{
 	RoundTripper: requestMeter.Transport(&http.Transport{}, func(u *url.URL) string {
@@ -72,7 +72,7 @@ func NewClient(indexerName, frontendURL, authToken string) Client {
 // or failed by calling Complete with the same identifier. While processing, the identifier of
 // the record must appear in all heartbeat requests.
 func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ error) {
-	url, err := makeQueueURL(c.frontendURL, c.authToken, "dequeue")
+	url, err := makeIndexManagerURL(c.frontendURL, c.authToken, "dequeue")
 	if err != nil {
 		return store.Index{}, false, err
 	}
@@ -103,7 +103,7 @@ func (c *client) Dequeue(ctx context.Context) (index store.Index, _ bool, _ erro
 // Complete marks the target index record as complete or errored depending on the existence of an
 // error message.
 func (c *client) Complete(ctx context.Context, indexID int, indexErr error) error {
-	url, err := makeQueueURL(c.frontendURL, c.authToken, "complete")
+	url, err := makeIndexManagerURL(c.frontendURL, c.authToken, "complete")
 	if err != nil {
 		return err
 	}
@@ -124,10 +124,10 @@ func (c *client) Complete(ctx context.Context, indexID int, indexErr error) erro
 	return c.doAndDrop(ctx, "POST", url, payload)
 }
 
-// Heartbeat hints to the index queue that the indexer system is has not been lost and should not
-// release any of the index records assigned to the index agent.
+// Heartbeat hints to the index manager that the indexer system is has not been lost and should not
+// release any of the index records assigned to the indexer.
 func (c *client) Heartbeat(ctx context.Context, indexIDs []int) error {
-	url, err := makeQueueURL(c.frontendURL, c.authToken, "heartbeat")
+	url, err := makeIndexManagerURL(c.frontendURL, c.authToken, "heartbeat")
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (c *client) do(ctx context.Context, method string, url *url.URL, body io.Re
 	req, ht := nethttp.TraceRequest(
 		span.Tracer(),
 		req,
-		nethttp.OperationName("Code Intel Index Queue Client"),
+		nethttp.OperationName("Code Intel Index Manager Client"),
 		nethttp.ClientTrace(false),
 	)
 	defer ht.Finish()
@@ -201,7 +201,7 @@ func (c *client) do(ctx context.Context, method string, url *url.URL, body io.Re
 	return true, resp.Body, nil
 }
 
-func makeQueueURL(baseURL, authToken, op string) (*url.URL, error) {
+func makeIndexManagerURL(baseURL, authToken, op string) (*url.URL, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err

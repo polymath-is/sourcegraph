@@ -11,9 +11,9 @@ LABEL com.sourcegraph.github.url=https://github.com/sourcegraph/sourcegraph/comm
 
 # hadolint ignore=DL3018
 RUN apk update && apk add --no-cache \
-    tini
+  tini
 
 USER sourcegraph
-EXPOSE 3190
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/precise-code-intel-index-agent"]
-COPY precise-code-intel-index-agent /usr/local/bin/
+EXPOSE 3189
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/precise-code-intel-index-manager"]
+COPY precise-code-intel-index-manager /usr/local/bin/

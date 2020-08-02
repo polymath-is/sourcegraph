@@ -2,7 +2,7 @@ package main
 
 func PreciseCodeIntelIndexer() *Container {
 	return &Container{
-		Name:        "precise-code-intel-index-queue",
+		Name:        "precise-code-intel-index-manager",
 		Title:       "Precise Code Intel Index Queue",
 		Description: "Automatically schedules index jobs for popular, active Go repositories.",
 		Groups: []Group{
@@ -47,7 +47,7 @@ func PreciseCodeIntelIndexer() *Container {
 							Name:        "99th_percentile_store_duration",
 							Description: "99th percentile successful database query duration over 5m",
 							// TODO(efritz) - ensure these exclude error durations
-							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_code_intel_store_duration_seconds_bucket{job="precise-code-intel-index-queue"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le)(rate(src_code_intel_store_duration_seconds_bucket{job="precise-code-intel-index-manager"}[5m])))`,
 							DataMayNotExist:   true,
 							DataMayBeNaN:      true,
 							Warning:           Alert{GreaterOrEqual: 20},
@@ -58,7 +58,7 @@ func PreciseCodeIntelIndexer() *Container {
 						{
 							Name:              "store_errors",
 							Description:       "database errors every 5m",
-							Query:             `increase(src_code_intel_store_errors_total{job="precise-code-intel-index-queue"}[5m])`,
+							Query:             `increase(src_code_intel_store_errors_total{job="precise-code-intel-index-manager"}[5m])`,
 							DataMayNotExist:   true,
 							Warning:           Alert{GreaterOrEqual: 20},
 							PanelOptions:      PanelOptions().LegendFormat("store operation"),
@@ -170,7 +170,7 @@ func PreciseCodeIntelIndexer() *Container {
 						{
 							Name:              "99th_percentile_gitserver_duration",
 							Description:       "99th percentile successful gitserver query duration over 5m",
-							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_gitserver_request_duration_seconds_bucket{job="precise-code-intel-index-queue"}[5m])))`,
+							Query:             `histogram_quantile(0.99, sum by (le,category)(rate(src_gitserver_request_duration_seconds_bucket{job="precise-code-intel-index-manager"}[5m])))`,
 							DataMayNotExist:   true,
 							DataMayBeNaN:      true,
 							Warning:           Alert{GreaterOrEqual: 20},
@@ -181,7 +181,7 @@ func PreciseCodeIntelIndexer() *Container {
 						{
 							Name:              "gitserver_error_responses",
 							Description:       "gitserver error responses every 5m",
-							Query:             `sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="precise-code-intel-index-queue",code!~"2.."}[5m]))`,
+							Query:             `sum by (category)(increase(src_gitserver_request_duration_seconds_count{job="precise-code-intel-index-manager",code!~"2.."}[5m]))`,
 							DataMayNotExist:   true,
 							Warning:           Alert{GreaterOrEqual: 5},
 							PanelOptions:      PanelOptions().LegendFormat("{{category}}"),
@@ -190,7 +190,7 @@ func PreciseCodeIntelIndexer() *Container {
 						},
 					},
 					{
-						sharedFrontendInternalAPIErrorResponses("precise-code-intel-index-queue"),
+						sharedFrontendInternalAPIErrorResponses("precise-code-intel-index-manager"),
 					},
 				},
 			},
@@ -199,12 +199,12 @@ func PreciseCodeIntelIndexer() *Container {
 				Hidden: true,
 				Rows: []Row{
 					{
-						sharedContainerCPUUsage("precise-code-intel-index-queue"),
-						sharedContainerMemoryUsage("precise-code-intel-index-queue"),
+						sharedContainerCPUUsage("precise-code-intel-index-manager"),
+						sharedContainerMemoryUsage("precise-code-intel-index-manager"),
 					},
 					{
-						sharedContainerRestarts("precise-code-intel-index-queue"),
-						sharedContainerFsInodes("precise-code-intel-index-queue"),
+						sharedContainerRestarts("precise-code-intel-index-manager"),
+						sharedContainerFsInodes("precise-code-intel-index-manager"),
 					},
 				},
 			},
@@ -213,12 +213,12 @@ func PreciseCodeIntelIndexer() *Container {
 				Hidden: true,
 				Rows: []Row{
 					{
-						sharedProvisioningCPUUsage7d("precise-code-intel-index-queue"),
-						sharedProvisioningMemoryUsage7d("precise-code-intel-index-queue"),
+						sharedProvisioningCPUUsage7d("precise-code-intel-index-manager"),
+						sharedProvisioningMemoryUsage7d("precise-code-intel-index-manager"),
 					},
 					{
-						sharedProvisioningCPUUsage5m("precise-code-intel-index-queue"),
-						sharedProvisioningMemoryUsage5m("precise-code-intel-index-queue"),
+						sharedProvisioningCPUUsage5m("precise-code-intel-index-manager"),
+						sharedProvisioningMemoryUsage5m("precise-code-intel-index-manager"),
 					},
 				},
 			},
@@ -227,8 +227,8 @@ func PreciseCodeIntelIndexer() *Container {
 				Hidden: true,
 				Rows: []Row{
 					{
-						sharedGoGoroutines("precise-code-intel-index-queue"),
-						sharedGoGcDuration("precise-code-intel-index-queue"),
+						sharedGoGoroutines("precise-code-intel-index-manager"),
+						sharedGoGcDuration("precise-code-intel-index-manager"),
 					},
 				},
 			},
@@ -237,7 +237,7 @@ func PreciseCodeIntelIndexer() *Container {
 				Hidden: true,
 				Rows: []Row{
 					{
-						sharedKubernetesPodsAvailable("precise-code-intel-index-queue"),
+						sharedKubernetesPodsAvailable("precise-code-intel-index-manager"),
 					},
 				},
 			},

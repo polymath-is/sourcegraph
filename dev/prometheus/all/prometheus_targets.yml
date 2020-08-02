@@ -45,14 +45,14 @@
     # precise-code-intel-worker
     - host.docker.internal:6088
 - labels:
-    job: precise-code-intel-index-queue
+    job: precise-code-intel-index-manager
   targets:
-    # precise-code-intel-index-queue
+    # precise-code-intel-index-manager
     - host.docker.internal:6089
 - labels:
-  job: precise-code-intel-index-agent
+  job: precise-code-intel-indexer
 targets:
-  # precise-code-intel-index-agent
+  # precise-code-intel-indexer
   - host.docker.internal:6090
 - labels:
     job: postgres_exporter
